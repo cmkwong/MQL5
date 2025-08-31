@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
-//|                                                    MartingaleMA.mq5|
+//|                                                  MartingaleMA.mq5|
 //|                        Copyright 2025, YourName                  |
-//|                                       https://www.yourwebsite.com |
+//|                                      https://www.yourwebsite.com |
 //+------------------------------------------------------------------+
 #include <Trade/Trade.mqh>
 CTrade trade;
@@ -24,17 +24,25 @@ double currentBuyGridStep = 0;
 
 int    handle_rsi;
 double rsi_array[3];
+string filename;
+int    spreadSheetHandler;
 
 //+------------------------------------------------------------------+
-//| Expert initialization function                                     |
+//| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit() {
    // create the RSI handler
    handle_rsi = iRSI(_Symbol, PERIOD_M30, 14, PRICE_CLOSE);
+   filename   = "logFile_" + getCurrentTimeString() + ".csv";
+   // write file
+   spreadSheetHandler = FileOpen(filename, FILE_READ | FILE_WRITE | FILE_CSV | FILE_ANSI | FILE_COMMON, ',');
+   // write header
+   FileSeek(spreadSheetHandler, 0, SEEK_END);
+   FileWrite(spreadSheetHandler, "totalBuyCost", "totalBuyVolume", "totalBuyCost / totalBuyVolume", "breakEvenTP");
    return (INIT_SUCCEEDED);
 }
 //+------------------------------------------------------------------+
-//| Expert deinitialization function                                   |
+//| Expert deinitialization function                                 |
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason) {
 }
@@ -129,13 +137,13 @@ void CheckBuyGridLevels() {
 
    if(nr_buy_positions > 0) {
       double nextGridBuyPrice = NormalizeDouble(minBuyPrice - (currentBuyGridStep)*MathPow(gridStepMultiplier, nr_buy_positions), digits_number);
-      double currentAsk       = NormalizeDouble(SymbolInfoDouble(_Symbol, SYMBOL_ASK), digits_number);
+      // get normalized ask price
+      double currentAsk = NormalizeDouble(SymbolInfoDouble(_Symbol, SYMBOL_ASK), digits_number);
 
       if(currentAsk <= nextGridBuyPrice) {
          // new lot size
          double newLotSize = initialLotSize * MathPow(lotMultiplier, nr_buy_positions);
-         double lotStep    = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-         newLotSize        = (int)(newLotSize / lotStep) * lotStep;
+         newLotSize        = normalizeLot(newLotSize);
 
          // check required margin
          double requiredMargin = accountInfo.MarginCheck(_Symbol, ORDER_TYPE_BUY, newLotSize, currentAsk);
@@ -157,6 +165,7 @@ void SetBreakEvenTP() {
    double totalBuyVolume = 0;
    double totalBuyCost   = 0;
 
+   // calculate the buy cost
    for(int i = 0; i < PositionsTotal(); i++) {
       ulong ticket = PositionGetTicket(i);
       // select the position and with the same symbol
@@ -169,23 +178,19 @@ void SetBreakEvenTP() {
    }
 
    if(totalBuyVolume > 0) {
-      double breakEvenBuyPrice = NormalizeDouble((totalBuyCost / totalBuyVolume) + breakEvenTP, digits_number);
+      double buyCost           = totalBuyCost / totalBuyVolume;
+      double breakEvenBuyPrice = NormalizeDouble(buyCost + breakEvenTP, digits_number);
       double currentBid        = NormalizeDouble(SymbolInfoDouble(_Symbol, SYMBOL_BID), digits_number);
 
       if(currentBid >= breakEvenBuyPrice) {
          Print("-------------------------------");
          Print("totalBuyCost: ", totalBuyCost, " totalBuyVolume: ", totalBuyVolume, " (totalBuyCost / totalBuyVolume): ", (totalBuyCost / totalBuyVolume), " breakEvenTP: ", breakEvenTP);
-         string nowStr = TimeToString(TimeCurrent());
+         // string nowStr = TimeToString(TimeCurrent());
          // string filename = "logFile" + "_" + nowStr + ".csv";
-         string filename = "logFile.csv";
-         // string cols[]   = {"totalBuyCost: ", " totalBuyVolume: ", " (totalBuyCost / totalBuyVolume): ", " breakEvenTP: "};
-         // string values[] = {DoubleToString(totalBuyCost), DoubleToString(totalBuyVolume), DoubleToString((totalBuyCost / totalBuyVolume)), DoubleToString(breakEvenTP)};
 
-         // write file
-         int spreadSheetHandler = FileOpen(filename, FILE_READ | FILE_WRITE | FILE_CSV | FILE_ANSI | FILE_COMMON, ',');
-         Print("TERMINAL_COMMONDATA_PATH: ", TerminalInfoString(TERMINAL_COMMONDATA_PATH));
+         Print("TERMINAL_COMMONDATA_PATH: ", TerminalInfoString(TERMINAL_COMMONDATA_PATH) + "/" + filename);
          FileSeek(spreadSheetHandler, 0, SEEK_END);
-         FileWrite(spreadSheetHandler, "totalBuyCost: ", DoubleToString(totalBuyCost), " totalBuyVolume: ", DoubleToString(totalBuyVolume), " (totalBuyCost / totalBuyVolume): ", DoubleToString((totalBuyCost / totalBuyVolume)), " breakEvenTP: ", DoubleToString(breakEvenTP));
+         FileWrite(spreadSheetHandler, DoubleToString(totalBuyCost), DoubleToString(totalBuyVolume), DoubleToString((totalBuyCost / totalBuyVolume)), DoubleToString(breakEvenTP));
 
          // WriteCsv(filename, cols, values);
          CloseAllBuyPositions();
@@ -207,28 +212,67 @@ void CloseAllBuyPositions() {
 }
 
 // write the csv file
-void WriteCsv(string filename, string &cols[], string &values[]) {
-   // open file for reading and writing, as CSV format, ANSI mode
-   int spreadSheetHandler = FileOpen(filename, FILE_READ | FILE_WRITE | FILE_CSV | FILE_ANSI | FILE_COMMON, ',');
-   Print("TERMINAL_COMMONDATA_PATH: ", TerminalInfoString(TERMINAL_COMMONDATA_PATH));
+// void WriteCsv(string filename, string &cols[], string &values[]) {
+//    // open file for reading and writing, as CSV format, ANSI mode
+//    int spreadSheetHandler = FileOpen(filename, FILE_READ | FILE_WRITE | FILE_CSV | FILE_ANSI | FILE_COMMON, ',');
+//    Print("TERMINAL_COMMONDATA_PATH: ", TerminalInfoString(TERMINAL_COMMONDATA_PATH));
 
-   // building parameters
-   string datas[];
-   int    currentSize;
-   for(int i = 0; i < ArraySize(cols); i++) {
-      currentSize = ArraySize(datas);
-      ArrayResize(datas, currentSize + 1);
-      datas[currentSize] = cols[i];
-      currentSize        = ArraySize(datas);
-      ArrayResize(datas, currentSize + 1);
-      datas[currentSize] = values[i];
+//    // building parameters
+//    string datas[];
+//    int    currentSize;
+//    for(int i = 0; i < ArraySize(cols); i++) {
+//       currentSize = ArraySize(datas);
+//       ArrayResize(datas, currentSize + 1);
+//       datas[currentSize] = cols[i];
+//       currentSize        = ArraySize(datas);
+//       ArrayResize(datas, currentSize + 1);
+//       datas[currentSize] = values[i];
+//    }
+//    ArrayPrint(datas);
+//    // go to the end of file
+//    FileSeek(spreadSheetHandler, 0, SEEK_END);
+//    // FileWriteArray(spreadSheetHandler, datas, 0, WHOLE_ARRAY);
+//    // FileWrite(spreadSheetHandler, "a1", 1);
+
+//    // close the file
+//    FileClose(spreadSheetHandler);
+// }
+
+// normalized into valid lot size corresponding to the Symbol
+double normalizeLot(double rawLot) {
+   // new lot size
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   return (int)(rawLot / lotStep) * lotStep;
+}
+
+// get the current time string, eg: 20250829_095605
+string getCurrentTimeString() {
+   MqlDateTime tm = {};
+   // Get the current time as datetime
+   datetime time_server = TimeLocal(tm);
+   string   monS        = (string)tm.mon;
+   if(StringLen(monS) == 1) {
+      monS = "0" + monS;
    }
-   ArrayPrint(datas);
-   // go to the end of file
-   FileSeek(spreadSheetHandler, 0, SEEK_END);
-   // FileWriteArray(spreadSheetHandler, datas, 0, WHOLE_ARRAY);
-   // FileWrite(spreadSheetHandler, "a1", 1);
+   string dayS = (string)tm.day;
+   if(StringLen(dayS) == 1) {
+      dayS = "0" + dayS;
+   }
+   string hourS = (string)tm.hour;
+   if(StringLen(hourS) == 1) {
+      hourS = "0" + hourS;
+   }
+   string minS = (string)tm.min;
+   if(StringLen(minS) == 1) {
+      minS = "0" + minS;
+   }
+   string secS = (string)tm.sec;
+   if(StringLen(secS) == 1) {
+      secS = "0" + secS;
+   }
+   return (string)tm.year + monS + dayS + "_" + hourS + minS + secS;
+}
 
-   // close the file
-   FileClose(spreadSheetHandler);
+double lotExp(int nr_buy_positions) {
+   return 0.1 * exp(nr_buy_positions / 25) + 1;
 }
