@@ -3,21 +3,25 @@
 //|                        Copyright 2025, YourName                  |
 //|                                      https://www.yourwebsite.com |
 //+------------------------------------------------------------------+
-#include <Trade/Trade.mqh>
-CTrade trade;
 #include <Trade/AccountInfo.mqh>
+#include <Trade/Trade.mqh>
+CTrade              trade;
 static CAccountInfo accountInfo;
 
 // grid parameters
 input double initialLotSize     = 0.01;
 input double lotMultiplier      = 1.5;
-input int    gridStepPoints     = 100;
+input int    gridStepPoints     = 10;
 input double gridStepMultiplier = 1.05;
-input int    breakEvenTPPoints  = 400;
+input int    breakEvenTPPoints  = 20;
+input int    stopLossMoney      = 2500;   // set to 0 means it is no stop loss
+input int    SleepDays          = 120;
 
-double gridStep    = gridStepPoints * _Point;
-double breakEvenTP = breakEvenTPPoints * _Point;
-int    digits_number;
+double   gridStep    = gridStepPoints * _Point;
+double   breakEvenTP = breakEvenTPPoints * _Point;
+int      digits_number;
+int      BuyMagicNumber   = 1;   // magic number for first strategy
+datetime backToTradeUntil = 0;   // continue to trade after this date
 
 // Grid tracking variable
 double currentBuyGridStep = 0;
@@ -33,7 +37,8 @@ int    spreadSheetHandler;
 int OnInit() {
    // create the RSI handler
    handle_rsi = iRSI(_Symbol, PERIOD_M30, 14, PRICE_CLOSE);
-   filename   = "logFile_" + getCurrentTimeString() + ".csv";
+   // filename   = "logFile_" + getCurrentTimeString() + ".csv";
+   filename = "logFile_" + getCurrentTimeString() + "_" + getRandomString(5) + ".csv";
    // write file
    spreadSheetHandler = FileOpen(filename, FILE_READ | FILE_WRITE | FILE_CSV | FILE_ANSI | FILE_COMMON, ',');
    // write header
@@ -70,37 +75,41 @@ void InitializeVariables() {
 }
 
 void RunTradingStrategy() {
-   int    nr_buy_positions = CountBuyPositions();
-   double askPrice         = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-
+   // check if position holding
+   int nr_buy_positions = CountBuyPositions("buy");
    // Open inital buy position if no buy positions
-   if(nr_buy_positions == 0) {
+   if(nr_buy_positions == 0 && TimeCurrent() >= backToTradeUntil) {
       OpenInitialBuyPosition();
    }
 
+   CheckMagicBalance();
    CheckBuyGridLevels();
    SetBreakEvenTP();
 }
 
-// get how many position being hold
-int CountBuyPositions() {
+// get how many position being hold (position type: buy / sell / all)
+int CountBuyPositions(string positionType) {
    int count = 0;
    for(int i = 0; i < PositionsTotal(); i++) {
       ulong ticket = PositionGetTicket(i);
-      if(PositionSelectByTicket(ticket) &&
-         PositionGetString(POSITION_SYMBOL) == _Symbol &&
-         PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
-         count++;
+      if(PositionSelectByTicket(ticket) && PositionGetString(POSITION_SYMBOL) == _Symbol) {
+         if(positionType == "buy" && PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
+            count++;
+         } else if(positionType == "sell" && PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL) {
+            count++;
+         } else {
+            count++;
+         }
       }
    }
    return count;
 }
 
 void OpenInitialBuyPosition() {
-   double askPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);   // Get current ask price
-   //  double lotSize  = NormalizeLotSize(initialLotSize);
+   // get current ask price
+   double askPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   // double lotSize  = NormalizeLotSize(initialLotSize);
    double requiredMargin = accountInfo.MarginCheck(_Symbol, ORDER_TYPE_BUY, initialLotSize, askPrice);
-
    // check if enough of margin to buy
    if(requiredMargin > accountInfo.FreeMargin()) {
       Print("Not enough margin for initial buy! Required: ", requiredMargin, " Free: ", accountInfo.FreeMargin());
@@ -114,6 +123,7 @@ void OpenInitialBuyPosition() {
    }
 }
 
+// check the grid level and if good to buy
 void CheckBuyGridLevels() {
    double minBuyPrice      = DBL_MAX;
    int    nr_buy_positions = 0;
@@ -136,6 +146,9 @@ void CheckBuyGridLevels() {
    }
 
    if(nr_buy_positions > 0) {
+      // setting the magic number for position
+      trade.SetExpertMagicNumber(BuyMagicNumber);
+      // calculate the next grid buying price
       double nextGridBuyPrice = NormalizeDouble(minBuyPrice - (currentBuyGridStep)*MathPow(gridStepMultiplier, nr_buy_positions), digits_number);
       // get normalized ask price
       double currentAsk = NormalizeDouble(SymbolInfoDouble(_Symbol, SYMBOL_ASK), digits_number);
@@ -143,12 +156,16 @@ void CheckBuyGridLevels() {
       if(currentAsk <= nextGridBuyPrice) {
          // new lot size
          double newLotSize = initialLotSize * MathPow(lotMultiplier, nr_buy_positions);
-         newLotSize        = normalizeLot(newLotSize);
+         newLotSize        = NormalizeLot(newLotSize);
 
          // check required margin
          double requiredMargin = accountInfo.MarginCheck(_Symbol, ORDER_TYPE_BUY, newLotSize, currentAsk);
          if(requiredMargin > accountInfo.FreeMargin()) {
-            Print("Not enough margin for grid buy!");
+            Print("Not enough margin for grid buy! Required Margin / Free Margin: ", DoubleToString(requiredMargin), " / ", DoubleToString(accountInfo.FreeMargin()));
+            CloseAllBuyPositions();
+            datetime currDatetime = TimeCurrent();
+            backToTradeUntil      = AddDate(currDatetime, SleepDays);
+            Print("==============> Restarted ", TimeToString(currDatetime), " until ", TimeToString(backToTradeUntil), "<==============");
             return;
          }
 
@@ -157,6 +174,18 @@ void CheckBuyGridLevels() {
             Print("Grid buy error: ", GetLastError());
          }
       }
+   }
+}
+
+// check if the balance excced the stop loss
+void CheckMagicBalance() {
+   double magicBalance = GetMagicBalance(BuyMagicNumber);
+   // set to 0 means it is no stop loss
+   if(stopLossMoney != 0 && magicBalance * -1 >= stopLossMoney) {
+      CloseAllBuyPositions();
+      datetime currDatetime = TimeCurrent();
+      backToTradeUntil      = AddDate(currDatetime, SleepDays);
+      Print("==============> Stopped Loss at ", TimeToString(currDatetime), " - ", magicBalance * -1, " until ", TimeToString(backToTradeUntil), "<==============");
    }
 }
 
@@ -201,14 +230,35 @@ void SetBreakEvenTP() {
 
 // close all positions
 void CloseAllBuyPositions() {
+   // getting all position tickets
+   ulong tickets[];
    for(int i = 0; i < PositionsTotal(); i++) {
-      ulong ticket = PositionGetTicket(i);
+      int currentSize = ArraySize(tickets);
+      ArrayResize(tickets, currentSize + 1);
+      tickets[currentSize] = PositionGetTicket(i);
+      Print("+++++++++++++++++ Closing Ticket / i: ", tickets[currentSize], " / ", i, " +++++++++++++++++");
+   }
+   // looping for each of tickets array
+   for(int i = 0; i < ArraySize(tickets); i++) {
+      ulong ticket = tickets[i];
       if(PositionSelectByTicket(ticket) && PositionGetString(POSITION_SYMBOL) == _Symbol) {
-         if(!trade.PositionClose(ticket, 20)) {
-            Print("There is error when close position - ", ticket, "with error - ", GetLastError());
-         }
+         trade.PositionClose(ticket, ULONG_MAX);
+         Sleep(100);   // Relax for 100 ms
       }
    }
+   Print("++++++++++++++++++++++++++++++++++");
+}
+
+// get the total balance from same magic number
+double GetMagicBalance(int magicNum) {
+   double positionBalance = 0;
+   for(int i = 0; i < PositionsTotal(); i++) {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket) && PositionGetInteger(POSITION_MAGIC) == magicNum) {
+         positionBalance += PositionGetDouble(POSITION_PROFIT);
+      }
+   }
+   return positionBalance;
 }
 
 // write the csv file
@@ -239,7 +289,7 @@ void CloseAllBuyPositions() {
 // }
 
 // normalized into valid lot size corresponding to the Symbol
-double normalizeLot(double rawLot) {
+double NormalizeLot(double rawLot) {
    // new lot size
    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
    return (int)(rawLot / lotStep) * lotStep;
@@ -271,6 +321,22 @@ string getCurrentTimeString() {
       secS = "0" + secS;
    }
    return (string)tm.year + monS + dayS + "_" + hourS + minS + secS;
+}
+
+// add days
+datetime AddDate(datetime currDate, int daysToChange) {
+   datetime newDate = currDate + (daysToChange * 86400);   // Add 5 days
+   return newDate;
+}
+
+// random string
+string getRandomString(int strLen, int min = 1, int max = 9) {
+   string randStr = "";
+   for(int i = 0; i < strLen; i++) {
+      int randomIntInRange  = (int)(MathRand() * (max - min + 1) / 32767.0) + min;
+      randStr              += (string)(randomIntInRange);
+   }
+   return randStr;
 }
 
 double lotExp(int nr_buy_positions) {
