@@ -14,7 +14,8 @@
 // parameters
 input double LotSize          = 1.0;
 input int    MaxPositionCount = 1;
-input int    TakeProfit       = 200;
+input int    TakeProfit       = 400;
+input int    StopLoss         = 150;
 input int    BandPeriod       = 30;
 input double BandDeviation    = 2.0;
 // variables
@@ -64,7 +65,8 @@ void OnDeinit(const int reason) {
 void OnTick() {
    InitializeVariables();
    StrategyCheck_Entry();
-   StrategyCheck_Exit();
+   StrategyCheck_FirstLeg_Exit();
+   StrategyCheck_SecondLeg_Exit();
 }
 //+------------------------------------------------------------------+
 //| Function to execute trades                                        |
@@ -84,7 +86,7 @@ void StrategyCheck_Entry() {
       Print("Error copying band values");
       return;
    }
-   // getting variables
+   // getting indicator parameter
    double upper    = upperBand[0];
    double lower    = lowerBand[0];
    double middle   = middleBand[0];
@@ -95,45 +97,97 @@ void StrategyCheck_Entry() {
    for(int r = 0; r < ArrayRange(myTickets, 0); r++) {
       ulong longTicket  = myTickets[r][0];
       ulong shortTicket = myTickets[r][1];
-      // if not hold position
-      if(!longTicket && askPrice >= upper) {
-         myTickets[r][0] = OpenInitialPosition(_Symbol, LotSize, 0);
-         // fill another leg
-         if(!shortTicket) {
-            myTickets[r][1] = OpenInitialPosition(_Symbol, LotSize, 1);
-         }
-      }
-      if(!shortTicket && bidPrice <= lower) {
-         myTickets[r][1] = OpenInitialPosition(_Symbol, LotSize, 1);
-         // fill another leg
-         if(!longTicket) {
+      // if not hold position for both pair
+      if(!longTicket && !shortTicket) {
+         if(askPrice >= upper) {
             myTickets[r][0] = OpenInitialPosition(_Symbol, LotSize, 0);
+            // fill another leg
+            if(!shortTicket) {
+               myTickets[r][1] = OpenInitialPosition(_Symbol, LotSize, 1);
+            }
+         } else if(bidPrice <= lower) {
+            myTickets[r][1] = OpenInitialPosition(_Symbol, LotSize, 1);
+            // fill another leg
+            if(!longTicket) {
+               myTickets[r][0] = OpenInitialPosition(_Symbol, LotSize, 0);
+            }
          }
       }
    }
 }
 
-// exit the positions
-void StrategyCheck_Exit() {
+// exit the first leg positions
+void StrategyCheck_FirstLeg_Exit() {
    // looping for each position pairs
    for(int r = 0; r < ArrayRange(myTickets, 0); r++) {
       ulong longTicket  = myTickets[r][0];
       ulong shortTicket = myTickets[r][1];
+      if(!longTicket || !shortTicket) {
+         continue;
+      }
       // check if position need to exit
       if(PositionSelectByTicket(longTicket) && PositionGetDouble(POSITION_PROFIT) >= TakeProfit) {
          // close position
          trade.PositionClose(longTicket, ULONG_MAX);
-         // fill the leg
-         myTickets[r][0] = OpenInitialPosition(_Symbol, LotSize, 0);
          Print("Take profit: ", DoubleToString(PositionGetDouble(POSITION_PROFIT)));
-         Print("Filling the type ", PositionGetInteger(POSITION_TYPE), " leg at: ", PositionGetDouble(POSITION_PRICE_OPEN));
+         // fill the leg
+         myTickets[r][0] = false;
+         // Print("Filling the type ", PositionGetInteger(POSITION_TYPE), " leg at: ", PositionGetDouble(POSITION_PRICE_OPEN));
       } else if(PositionSelectByTicket(shortTicket) && PositionGetDouble(POSITION_PROFIT) >= TakeProfit) {
          // close position
          trade.PositionClose(shortTicket, ULONG_MAX);
-         // fill the leg
-         myTickets[r][1] = OpenInitialPosition(_Symbol, LotSize, 1);
          Print("Take profit: ", DoubleToString(PositionGetDouble(POSITION_PROFIT)));
-         Print("Filling the type ", PositionGetInteger(POSITION_TYPE), " leg at: ", PositionGetDouble(POSITION_PRICE_OPEN));
+         // fill the leg
+         myTickets[r][1] = false;
+         // Print("Filling the type ", PositionGetInteger(POSITION_TYPE), " leg at: ", PositionGetDouble(POSITION_PRICE_OPEN));
+      }
+   }
+}
+
+// exit the first leg positions
+void StrategyCheck_SecondLeg_Exit() {
+   // ------------- getting info from indicator
+   double upperBand[], lowerBand[], middleBand[];
+   if(
+       CopyBuffer(Bb_Handle, 0, 0, 1, upperBand) <= 0 ||
+       CopyBuffer(Bb_Handle, 1, 0, 1, middleBand) <= 0 ||
+       CopyBuffer(Bb_Handle, 2, 0, 1, lowerBand) <= 0) {
+      Print("Error copying band values");
+      return;
+   }
+   // getting indicator parameter
+   double upper    = upperBand[0];
+   double lower    = lowerBand[0];
+   double middle   = middleBand[0];
+   double askPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bidPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   // MqlTick tick;
+   // SymbolInfoTick(_Symbol, tick);
+   // double tick_askPrice            = tick.ask;
+   // double tick_bidPrice            = tick.bid;
+   // Print("Different ask price: askPrice / tick_askPrice: ", askPrice, " / ", askPrice);
+   // Print("Different ask price: bidPrice / tick_bidPrice: ", bidPrice, " / ", bidPrice);
+
+   // looping for each position pairs
+   for(int r = 0; r < ArrayRange(myTickets, 0); r++) {
+      ulong longTicket  = myTickets[r][0];
+      ulong shortTicket = myTickets[r][1];
+      // only one leg in pair will be executed
+      if(longTicket && shortTicket) {
+         continue;
+      }
+      // long ticket left
+      if(longTicket && PositionSelectByTicket(longTicket)) {
+         if(bidPrice >= upper || PositionGetDouble(POSITION_PROFIT) <= -StopLoss) {
+            trade.PositionClose(longTicket, ULONG_MAX);
+            myTickets[r][0] = false;
+         }
+         // short ticket left
+      } else if(shortTicket && PositionSelectByTicket(shortTicket)) {
+         if(askPrice <= lower || PositionGetDouble(POSITION_PROFIT) <= -StopLoss) {
+            trade.PositionClose(shortTicket, ULONG_MAX);
+            myTickets[r][1] = false;
+         }
       }
    }
 }
