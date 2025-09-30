@@ -11,9 +11,9 @@ static CAccountInfo accountInfo;
 // grid parameters
 input double i_initialLotSize     = 0.01;
 input double i_lotMultiplier      = 1.05;
-input int    i_gridStepPoints     = 50;
-input double i_gridStepMultiplier = 1.05;
-input int    i_breakEvenTPPoints  = 20;
+input int    i_gridStepPoints     = 100;
+input double i_gridStepMultiplier = 1.1;
+input int    i_breakEvenTPPoints  = 200;
 input int    i_stopLossMoney      = 2500;   // set to 0 means it is no stop loss
 input int    i_sleepDays          = 120;
 
@@ -21,7 +21,7 @@ input int    i_sleepDays          = 120;
 // double breakEvenTP = i_breakEvenTPPoints * _Point;
 
 // strategy constant
-string Symbols[]   = {"AUDNZD"};   // , "AUDUSD", "GBPUSD", "EURGBP"
+string Symbols[]   = {"AUDNZD", "AUDUSD", "GBPUSD", "EURGBP"};   // , "AUDUSD", "GBPUSD", "EURGBP"
 int    RSIPeriod[] = {14, 14, 14, 14};
 int    SymbolTotal = ArraySize(Symbols);
 
@@ -262,7 +262,7 @@ void CloseAllBuyPositions(int symbolIndex) {
          int currentSize = ArraySize(tickets);
          ArrayResize(tickets, currentSize + 1);
          tickets[currentSize] = PositionGetTicket(i);
-         Print("+++++++++++++++++ Closing Ticket / i: ", tickets[currentSize], " / ", i, " +++++++++++++++++");
+         Print("------------------------------ Closing Ticket / i: ", tickets[currentSize], " / ", i, " ------------------------------");
       }
    }
    // looping for each of tickets array
@@ -271,7 +271,7 @@ void CloseAllBuyPositions(int symbolIndex) {
       trade.PositionClose(readyClosedticket, ULONG_MAX);
       Sleep(100);   // Relax for 100 ms
    }
-   Print("++++++++++++++++++++++++++++++++++");
+   Print("------------------------------------------------------------");
 }
 
 // get the total balance from same magic number
