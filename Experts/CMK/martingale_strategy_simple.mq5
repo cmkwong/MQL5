@@ -3,6 +3,9 @@
 //|                        Copyright 2025, YourName                  |
 //|                                      https://www.yourwebsite.com |
 //+------------------------------------------------------------------+
+#include <CMK/Helper.mqh>
+#include <CMK/String.mqh>
+#include <CMK/Time.mqh>
 #include <Trade/AccountInfo.mqh>
 #include <Trade/Trade.mqh>
 CTrade              trade;
@@ -178,13 +181,13 @@ void CheckBuyGridLevels(int symbolIndex) {
       if(currentAsk <= nextGridBuyPrice) {
          // new lot size
          double newLotSize = i_initialLotSize * MathPow(i_lotMultiplier, nr_buy_positions);
-         newLotSize        = NormalizeLot(newLotSize);
+         newLotSize        = NormalizeLot(Symbols[symbolIndex], newLotSize);
 
          // check required margin
          double requiredMargin = accountInfo.MarginCheck(Symbols[symbolIndex], ORDER_TYPE_BUY, newLotSize, currentAsk);
          if(requiredMargin > accountInfo.FreeMargin()) {
             Print("Not enough margin for grid buy! Required Margin / Free Margin: ", DoubleToString(requiredMargin), " / ", DoubleToString(accountInfo.FreeMargin()));
-            CloseAllBuyPositions(symbolIndex);
+            CloseAllPositions(Symbols[symbolIndex], 0);
             datetime currDatetime           = TimeCurrent();
             v_backToTradeUntil[symbolIndex] = AddDate(currDatetime, i_sleepDays);
             Print("==============> Restarted ", TimeToString(currDatetime), " until ", TimeToString(v_backToTradeUntil[symbolIndex]), " <==============");
@@ -205,7 +208,7 @@ void CheckMagicBalance(int symbolIndex) {
    double magicBalance = GetMagicBalance(magicNumber);
    // set to 0 means it is no stop loss
    if(i_stopLossMoney != 0 && magicBalance * -1 >= i_stopLossMoney) {
-      CloseAllBuyPositions(symbolIndex);
+      CloseAllPositions(Symbols[symbolIndex], 0);
       datetime currDatetime = TimeCurrent();
       // stop the trading until below the date passed
       v_backToTradeUntil[symbolIndex] = AddDate(currDatetime, i_sleepDays);
@@ -246,19 +249,19 @@ void SetBreakEvenTP(int symbolIndex) {
          FileWrite(spreadSheetHandler, DoubleToString(totalBuyCost), DoubleToString(totalBuyVolume), DoubleToString((totalBuyCost / totalBuyVolume)), DoubleToString(v_breakEvenTPs[symbolIndex]));
 
          // WriteCsv(filename, cols, values);
-         CloseAllBuyPositions(symbolIndex);
+         CloseAllPositions(Symbols[symbolIndex], 0);
          Print("-------------------------------");
       }
    }
 }
 
 // close all positions
-void CloseAllBuyPositions(int symbolIndex) {
+void CloseAllBuyPositions(string requiredSymbol) {
    // getting all position tickets
    ulong tickets[];
    for(int i = 0; i < PositionsTotal(); i++) {
       ulong ticket = PositionGetTicket(i);
-      if(PositionSelectByTicket(ticket) && PositionGetString(POSITION_SYMBOL) == Symbols[symbolIndex]) {
+      if(PositionSelectByTicket(ticket) && PositionGetString(POSITION_SYMBOL) == requiredSymbol) {
          int currentSize = ArraySize(tickets);
          ArrayResize(tickets, currentSize + 1);
          tickets[currentSize] = PositionGetTicket(i);
@@ -271,7 +274,7 @@ void CloseAllBuyPositions(int symbolIndex) {
       trade.PositionClose(readyClosedticket, ULONG_MAX);
       Sleep(100);   // Relax for 100 ms
    }
-   Print("------------------------------------------------------------");
+   Print("------------------------------ Completed ------------------------------");
 }
 
 // get the total balance from same magic number
@@ -312,57 +315,6 @@ double GetMagicBalance(int magicNum) {
 //    // close the file
 //    FileClose(spreadSheetHandler);
 // }
-
-// normalized into valid lot size corresponding to the Symbol
-double NormalizeLot(double rawLot) {
-   // new lot size
-   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-   return (int)(rawLot / lotStep) * lotStep;
-}
-
-// get the current time string, eg: 20250829_095605
-string getCurrentTimeString() {
-   MqlDateTime tm = {};
-   // Get the current time as datetime
-   datetime time_server = TimeLocal(tm);
-   string   monS        = (string)tm.mon;
-   if(StringLen(monS) == 1) {
-      monS = "0" + monS;
-   }
-   string dayS = (string)tm.day;
-   if(StringLen(dayS) == 1) {
-      dayS = "0" + dayS;
-   }
-   string hourS = (string)tm.hour;
-   if(StringLen(hourS) == 1) {
-      hourS = "0" + hourS;
-   }
-   string minS = (string)tm.min;
-   if(StringLen(minS) == 1) {
-      minS = "0" + minS;
-   }
-   string secS = (string)tm.sec;
-   if(StringLen(secS) == 1) {
-      secS = "0" + secS;
-   }
-   return (string)tm.year + monS + dayS + "_" + hourS + minS + secS;
-}
-
-// add days
-datetime AddDate(datetime currDate, int daysToChange) {
-   datetime newDate = currDate + (daysToChange * 86400);   // Add 5 days
-   return newDate;
-}
-
-// random string
-string getRandomString(int strLen, int min = 1, int max = 9) {
-   string randStr = "";
-   for(int i = 0; i < strLen; i++) {
-      int randomIntInRange  = (int)(MathRand() * (max - min + 1) / 32767.0) + min;
-      randStr              += (string)(randomIntInRange);
-   }
-   return randStr;
-}
 
 double lotExp(int nr_buy_positions) {
    return 0.1 * exp(nr_buy_positions / 25) + 1;
