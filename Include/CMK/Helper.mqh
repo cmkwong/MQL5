@@ -4,16 +4,24 @@
 // get how many position being hold (position type: buy = 0 / sell = 1 / all = -1)
 int CountAllPositions(string requiredSymbol, int positionType = -1) {
    int count = 0;
-   for(int i = 0; i < PositionsTotal(); i++) {
+   int total = PositionsTotal();
+   for(int i = 0; i < total; i++) {
       ulong ticket = PositionGetTicket(i);
-      if(PositionSelectByTicket(ticket) && PositionGetString(POSITION_SYMBOL) == requiredSymbol) {
-         if(positionType == 0 && PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
-            count++;
-         } else if(positionType == 1 && PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL) {
-            count++;
-         } else {
-            count++;
-         }
+      if(ticket == 0)
+         continue;
+      if(!PositionSelectByTicket(ticket))
+         continue;
+
+      string sym = PositionGetString(POSITION_SYMBOL);
+      if(StringCompare(sym, requiredSymbol) != 0)
+         continue;
+
+      long ptype = PositionGetInteger(POSITION_TYPE);
+
+      if(positionType == -1 ||
+         (positionType == 0 && ptype == POSITION_TYPE_BUY) ||
+         (positionType == 1 && ptype == POSITION_TYPE_SELL)) {
+         count++;
       }
    }
    return count;
@@ -22,30 +30,32 @@ int CountAllPositions(string requiredSymbol, int positionType = -1) {
 // getting required tickets
 // filterSymbol: "" = all; actionType: buy = 0 / sell = 1 / all = -1
 void GetAllTickets(ulong &tickets[], string filterSymbol, int actionType = -1) {
-   // getting all position tickets
-   for(int i = 0; i < PositionsTotal(); i++) {
-      ulong requiredTicket = PositionGetTicket(i);
-      PositionSelectByTicket(requiredTicket);
-      // filter required symbol
-      if(filterSymbol != "" && PositionGetString(POSITION_SYMBOL) != filterSymbol) {
+   ArrayResize(tickets, 0);
+   int total = PositionsTotal();
+
+   for(int i = 0; i < total; i++) {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0)
          continue;
-      }
-      // all positions
-      if(actionType == 0) {
-         if(PositionGetInteger(POSITION_TYPE) != POSITION_TYPE_BUY) {
-            continue;
-         }
-      } else if(actionType == 1) {
-         if(PositionGetInteger(POSITION_TYPE) != POSITION_TYPE_SELL) {
-            continue;
-         }
-      } else if(actionType == -1) {
+      if(!PositionSelectByTicket(tk))
          continue;
+
+      string sym = PositionGetString(POSITION_SYMBOL);
+      if(filterSymbol != "" && StringCompare(sym, filterSymbol) != 0)
+         continue;
+
+      long ptype = PositionGetInteger(POSITION_TYPE);
+
+      if(actionType != -1) {
+         if(actionType == 0 && ptype != POSITION_TYPE_BUY)
+            continue;
+         if(actionType == 1 && ptype != POSITION_TYPE_SELL)
+            continue;
       }
-      int currentSize = ArraySize(tickets);
-      ArrayResize(tickets, currentSize + 1);
-      tickets[currentSize] = PositionGetTicket(i);
-      // Print(">>>>>>>>>>>>>>>>>> Prepare to close ticket / num: ", tickets[currentSize], " / ", ArrayRange(tickets, 0) + 1, " <<<<<<<<<<<<<<<<<<<<");
+
+      int n = ArraySize(tickets);
+      ArrayResize(tickets, n + 1);
+      tickets[n] = tk;
    }
 }
 
@@ -103,6 +113,18 @@ ulong OpenInitialPosition(string requiredSymbol, double lotSize = 1.0, int actio
    }
    // return a ticket
    return PositionGetTicket(PositionsTotal() - 1);
+}
+
+// get the total balance from same magic number
+double GetMagicBalance(int magicNum) {
+   double positionBalance = 0;
+   for(int i = 0; i < PositionsTotal(); i++) {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket) && PositionGetInteger(POSITION_MAGIC) == magicNum) {
+         positionBalance += PositionGetDouble(POSITION_PROFIT);
+      }
+   }
+   return positionBalance;
 }
 
 // normalized into valid lot size corresponding to the Symbol
