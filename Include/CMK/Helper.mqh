@@ -28,12 +28,12 @@ int CountAllPositions(string requiredSymbol, int positionType = -1) {
 }
 
 // getting required tickets
-// filterSymbol: "" = all; actionType: buy = 0 / sell = 1 / all = -1
-void GetAllTickets(ulong &tickets[], string filterSymbol, int actionType = -1) {
+// symbol: "" = all; actionType: buy = 0 / sell = 1 / all = -1
+void GetAllTickets(ulong &tickets[], string symbol, int actionType = -1) {
    ArrayResize(tickets, 0);
-   int total = PositionsTotal();
+   int totalPos = PositionsTotal();
 
-   for(int i = 0; i < total; i++) {
+   for(int i = 0; i < totalPos; i++) {
       ulong tk = PositionGetTicket(i);
       if(tk == 0)
          continue;
@@ -41,7 +41,7 @@ void GetAllTickets(ulong &tickets[], string filterSymbol, int actionType = -1) {
          continue;
 
       string sym = PositionGetString(POSITION_SYMBOL);
-      if(filterSymbol != "" && StringCompare(sym, filterSymbol) != 0)
+      if(symbol != "" && StringCompare(sym, symbol) != 0)
          continue;
 
       long ptype = PositionGetInteger(POSITION_TYPE);
@@ -59,12 +59,61 @@ void GetAllTickets(ulong &tickets[], string filterSymbol, int actionType = -1) {
    }
 }
 
+// get all ticket by magic
+int GetTickets_ByMagic(ulong &tickets[], ulong magic, bool includePending = false) {
+   ArrayResize(tickets, 0);
+
+   // 1) Positions (market positions)
+   int totalPos = PositionsTotal();
+   for(int i = 0; i < totalPos; i++) {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0)
+         continue;
+      if(!PositionSelectByTicket(tk))
+         continue;
+
+      ulong posMagic = PositionGetInteger(POSITION_MAGIC);
+      if(posMagic == magic) {
+         ulong ticket = PositionGetInteger(POSITION_TICKET);
+         int   n      = ArraySize(tickets);
+         ArrayResize(tickets, n + 1);
+         tickets[n] = ticket;
+      }
+   }
+
+   // 2) Pending Orders (optional)
+   if(includePending) {
+      int totalOrd = OrdersTotal();
+      for(int i = 0; i < totalOrd; i++) {
+         ulong tk = OrderGetTicket(i);
+         if(tk == 0)
+            continue;
+         if(!OrderSelect(tk))
+            continue;
+
+         ulong ordMagic = OrderGetInteger(ORDER_MAGIC);
+         if(ordMagic == magic) {
+            ulong ticket = OrderGetInteger(ORDER_TICKET);
+            int   n      = ArraySize(tickets);
+            ArrayResize(tickets, n + 1);
+            tickets[n] = ticket;
+         }
+      }
+   }
+
+   return ArraySize(tickets);
+}
+
 // close all positions
-// filterSymbol: "" = all; actionType: buy = 0 / sell = 1 / all = -1
-void CloseAllPositions(string filterSymbol, int actionType = -1) {
+// symbol: "" = all; actionType: buy = 0 / sell = 1 / all = -1
+void CloseAllPositions(string symbol = NULL, int actionType = -1, bool byMagic = false, ulong magicNum = NULL) {
    CTrade trade;
    ulong  tickets[];
-   GetAllTickets(tickets, filterSymbol, actionType);
+   if(!byMagic) {
+      GetAllTickets(tickets, symbol, actionType);
+   } else {
+      GetTickets_ByMagic(tickets, magicNum);
+   }
    // looping for each of tickets array
    for(int i = 0; i < ArraySize(tickets); i++) {
       ulong ticket = tickets[i];
@@ -77,12 +126,16 @@ void CloseAllPositions(string filterSymbol, int actionType = -1) {
 }
 
 // open the position by current price
-ulong OpenInitialPosition(string requiredSymbol, double lotSize = 1.0, int actionType = 0) {   // 0 = Long, 1 = Short
+ulong OpenInitialPosition(string requiredSymbol, double lotSize = 1.0, int actionType = 0, ulong magic = NULL) {   // 0 = Long, 1 = Short
    static CAccountInfo accountInfo;
    CTrade              trade;
    double              actionPrice    = 0.0;
    double              requiredMargin = 0.0;
    string              actionTypeStr  = "";
+   // magic assign
+   if(magic) {
+      trade.SetExpertMagicNumber(magic);
+   }
    if(actionType == 0) {
       actionTypeStr = "Long";
    } else {
@@ -127,9 +180,48 @@ double GetMagicBalance(int magicNum) {
    return positionBalance;
 }
 
+// get the total balance from same symbol
+double GetSymbolBalance(string symbol) {
+   double positionBalance = 0;
+   for(int i = 0; i < PositionsTotal(); i++) {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket) && PositionGetString(POSITION_SYMBOL) == symbol) {
+         positionBalance += PositionGetDouble(POSITION_PROFIT);
+      }
+   }
+   return positionBalance;
+}
+
 // normalized into valid lot size corresponding to the Symbol
 double NormalizeLot(string symbol, double rawLot) {
    // new lot size
    double lotStep = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
    return (int)(rawLot / lotStep) * lotStep;
+}
+
+// get the points difference between two prices
+int PointsBetween(double lastPrice, double firstPrice, string symbol) {
+   // Get point size and tick size for the symbol
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   // double ticksize = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE);
+
+   // if(point <= 0.0)
+   //    return 0.0;
+
+   // // Prefer tick size if the broker defines it (handles non-decimal increments)
+   // double unit = (ticksize > 0.0) ? ticksize : point;
+
+   // Convert price difference to "points"
+   double diff = lastPrice - firstPrice;
+   double pts  = diff / point;
+   // Print("lastPrice: ", DoubleToString(lastPrice));
+   // Print("firstPrice: ", DoubleToString(firstPrice));
+   // Print("double diff = lastPrice - firstPrice: ", DoubleToString(lastPrice - firstPrice));
+   // Print("double pts  = diff / point: ", DoubleToString(diff / point));
+   // Print("pts: ", pts);
+   if(pts < 0) {
+      return (int)MathFloor(pts);
+   } else {
+      return (int)MathCeil(pts);
+   }
 }
