@@ -5,7 +5,8 @@ int Encode3_Bytes(int a, int b, int c) {
 }
 
 // decode magic number
-void Decode3_Bytes(int v, int &a, int &b, int &c) {
+template<typename T>
+void Decode3_Bytes(T v, int &a, int &b, int &c) {
    a = (v >> 16) & 0xFF;
    b = (v >> 8) & 0xFF;
    c = v & 0xFF;

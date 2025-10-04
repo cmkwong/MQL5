@@ -104,72 +104,160 @@ int GetTickets_ByMagic(ulong &tickets[], ulong magic, bool includePending = fals
    return ArraySize(tickets);
 }
 
+int CloseAllTickets(ulong &tickets[]) {
+   CTrade trade;
+   int    closed = 0;
+   int    n      = ArraySize(tickets);
+   for(int i = 0; i < n; i++) {
+      ulong tk = tickets[i];
+      if(!PositionSelectByTicket(tk))
+         continue;
+
+      if(trade.PositionClose(tk, ULONG_MAX))
+         closed++;
+
+      Sleep(100);   // avoid server slowdown
+   }
+   return closed;
+}
+
 // close all positions
 // symbol: "" = all; actionType: buy = 0 / sell = 1 / all = -1
-void CloseAllPositions(string symbol = NULL, int actionType = -1, bool byMagic = false, ulong magicNum = NULL) {
-   CTrade trade;
-   ulong  tickets[];
-   if(!byMagic) {
+int CloseAllPositions(string symbol = "", int actionType = -1, bool byMagic = false, ulong magicNum = 0) {
+   ulong tickets[];
+
+   // get required ticket
+   if(byMagic)
+      GetTickets_ByMagic(tickets, magicNum, false);
+   else
       GetAllTickets(tickets, symbol, actionType);
-   } else {
-      GetTickets_ByMagic(tickets, magicNum);
-   }
-   // looping for each of tickets array
-   for(int i = 0; i < ArraySize(tickets); i++) {
-      ulong ticket = tickets[i];
-      if(PositionSelectByTicket(ticket)) {
-         trade.PositionClose(ticket, ULONG_MAX);
-         Sleep(100);   // Relax for 100 ms
-      }
-   }
-   Print(">>>>>>>>>>>>>>>>>> Position Closed Completed <<<<<<<<<<<<<<<<<<<<");
+
+   int n      = ArraySize(tickets);
+   int closed = CloseAllTickets(tickets);
+   PrintFormat(">>>>>>>> Closed %d/%d positions <<<<<<<<", closed, n);
+   return closed;
 }
 
 // open the position by current price
-ulong OpenInitialPosition(string requiredSymbol, double lotSize = 1.0, int actionType = 0, ulong magic = NULL) {   // 0 = Long, 1 = Short
+ulong OpenInitialPosition(string requiredSymbol,
+                          double lotSize    = 1.0,
+                          int    actionType = 0,   // 0 = Long, 1 = Short
+                          ulong  magic      = NULL,
+                          string comment    = "")   // 新增：下單注釋
+{
    static CAccountInfo accountInfo;
    CTrade              trade;
-   double              actionPrice    = 0.0;
-   double              requiredMargin = 0.0;
-   string              actionTypeStr  = "";
-   // magic assign
-   if(magic) {
+
+   double actionPrice    = 0.0;
+   double requiredMargin = 0.0;
+   string actionTypeStr  = (actionType == 0 ? "Long" : "Short");
+
+   // 設置魔術號
+   if(magic)
       trade.SetExpertMagicNumber(magic);
-   }
+
+   // 取得當前報價與所需保證金
    if(actionType == 0) {
-      actionTypeStr = "Long";
-   } else {
-      actionTypeStr = "Short";
-   }
-   if(actionType == 0) {
-      // get current ask price
       actionPrice    = SymbolInfoDouble(requiredSymbol, SYMBOL_ASK);
       requiredMargin = accountInfo.MarginCheck(requiredSymbol, ORDER_TYPE_BUY, lotSize, actionPrice);
-   } else if(actionType == 1) {
-      // get current bid price
+   } else {
       actionPrice    = SymbolInfoDouble(requiredSymbol, SYMBOL_BID);
       requiredMargin = accountInfo.MarginCheck(requiredSymbol, ORDER_TYPE_SELL, lotSize, actionPrice);
    }
 
-   // check if enough of margin to buy / sell
+   // 檢查可用保證金
    if(requiredMargin > accountInfo.FreeMargin()) {
-      Print("Not enough margin for initial ", actionTypeStr, "! Required: ", requiredMargin, " Free: ", accountInfo.FreeMargin());
-      return false;
+      PrintFormat("Not enough margin for initial %s! Required: %.2f Free: %.2f",
+                  actionTypeStr, requiredMargin, accountInfo.FreeMargin());
+      return 0;   // 失敗
    }
-   // trigger the action for buy
-   if(actionType == 0 && trade.Buy(lotSize, requiredSymbol, actionPrice, 0, 0, "Initial Buy")) {
-      Print("Initial position opened at ", actionPrice, " with lot size ", lotSize);
-   } else if(actionType == 1 && trade.Sell(lotSize, requiredSymbol, actionPrice, 0, 0, "Initial Sell")) {
-      Print("Initial position opened at ", actionPrice, " with lot size ", lotSize);
+
+   // 執行下單（注意：CTrade::Buy/Sell 的 price 可為 0 以使用當前市價）
+   bool  placed     = false;
+   ulong pos_ticket = 0;
+
+   if(actionType == 0) {
+      placed = trade.Buy(lotSize, requiredSymbol, 0.0, 0.0, 0.0, comment);
    } else {
-      Print("Initial position error: ", GetLastError());
+      placed = trade.Sell(lotSize, requiredSymbol, 0.0, 0.0, 0.0, comment);
    }
-   // return a ticket
-   return PositionGetTicket(PositionsTotal() - 1);
+
+   if(!placed) {
+      Print("Initial position error: ", GetLastError());
+      return 0;
+   }
+
+   // 取得最近的訂單/倉位票號
+   // 對於市價單，成功後通常會有持倉，優先從 PositionGetInteger 取得
+   ulong order_ticket = trade.ResultOrder();
+   ulong deal_ticket  = trade.ResultDeal();
+   ulong ret_ticket   = 0;
+
+   // 嘗試從持倉表找到該 symbol 的最新倉位
+   if(PositionSelect(requiredSymbol)) {
+      ret_ticket = (ulong)PositionGetInteger(POSITION_TICKET);
+      PrintFormat("Initial position opened at %s with lot size %.2f (ticket=%I64u)",
+                  actionTypeStr, lotSize, ret_ticket);
+      return ret_ticket;
+   }
+
+   // 若未能直接選中倉位，回退返回成交或訂單票號
+   if(deal_ticket != 0)
+      ret_ticket = deal_ticket;
+   else
+      ret_ticket = order_ticket;
+
+   PrintFormat("Initial position placed %s with lot size %.2f (ticket=%I64u)",
+               actionTypeStr, lotSize, ret_ticket);
+
+   return ret_ticket;
 }
 
+// // open the position by current price
+// ulong OpenInitialPosition(string requiredSymbol, double lotSize = 1.0, int actionType = 0, ulong magic = NULL) {   // 0 = Long, 1 = Short
+//    static CAccountInfo accountInfo;
+//    CTrade              trade;
+//    double              actionPrice    = 0.0;
+//    double              requiredMargin = 0.0;
+//    string              actionTypeStr  = "";
+//    // magic assign
+//    if(magic) {
+//       trade.SetExpertMagicNumber(magic);
+//    }
+//    if(actionType == 0) {
+//       actionTypeStr = "Long";
+//    } else {
+//       actionTypeStr = "Short";
+//    }
+//    if(actionType == 0) {
+//       // get current ask price
+//       actionPrice    = SymbolInfoDouble(requiredSymbol, SYMBOL_ASK);
+//       requiredMargin = accountInfo.MarginCheck(requiredSymbol, ORDER_TYPE_BUY, lotSize, actionPrice);
+//    } else if(actionType == 1) {
+//       // get current bid price
+//       actionPrice    = SymbolInfoDouble(requiredSymbol, SYMBOL_BID);
+//       requiredMargin = accountInfo.MarginCheck(requiredSymbol, ORDER_TYPE_SELL, lotSize, actionPrice);
+//    }
+
+//    // check if enough of margin to buy / sell
+//    if(requiredMargin > accountInfo.FreeMargin()) {
+//       Print("Not enough margin for initial ", actionTypeStr, "! Required: ", requiredMargin, " Free: ", accountInfo.FreeMargin());
+//       return false;
+//    }
+//    // trigger the action for buy
+//    if(actionType == 0 && trade.Buy(lotSize, requiredSymbol, actionPrice, 0, 0, "Initial Buy")) {
+//       Print("Initial position opened at ", actionPrice, " with lot size ", lotSize);
+//    } else if(actionType == 1 && trade.Sell(lotSize, requiredSymbol, actionPrice, 0, 0, "Initial Sell")) {
+//       Print("Initial position opened at ", actionPrice, " with lot size ", lotSize);
+//    } else {
+//       Print("Initial position error: ", GetLastError());
+//    }
+//    // return a ticket
+//    return PositionGetTicket(PositionsTotal() - 1);
+// }
+
 // get the total balance from same magic number
-double GetMagicBalance(int magicNum) {
+double GetMagicBalance(ulong magicNum) {
    double positionBalance = 0;
    for(int i = 0; i < PositionsTotal(); i++) {
       ulong ticket = PositionGetTicket(i);
@@ -200,28 +288,19 @@ double NormalizeLot(string symbol, double rawLot) {
 }
 
 // get the points difference between two prices
-int PointsBetween(double lastPrice, double firstPrice, string symbol) {
+int PointsDiff(double lastPrice, double firstPrice, string symbol) {
    // Get point size and tick size for the symbol
    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-   // double ticksize = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE);
-
-   // if(point <= 0.0)
-   //    return 0.0;
-
-   // // Prefer tick size if the broker defines it (handles non-decimal increments)
-   // double unit = (ticksize > 0.0) ? ticksize : point;
 
    // Convert price difference to "points"
    double diff = lastPrice - firstPrice;
    double pts  = diff / point;
-   // Print("lastPrice: ", DoubleToString(lastPrice));
-   // Print("firstPrice: ", DoubleToString(firstPrice));
-   // Print("double diff = lastPrice - firstPrice: ", DoubleToString(lastPrice - firstPrice));
-   // Print("double pts  = diff / point: ", DoubleToString(diff / point));
-   // Print("pts: ", pts);
+
    if(pts < 0) {
+      // eg: -5.3 -> -6.0
       return (int)MathFloor(pts);
    } else {
+      // eg: +5.3 -> +6.0
       return (int)MathCeil(pts);
    }
 }
