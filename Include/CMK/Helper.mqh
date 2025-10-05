@@ -176,10 +176,11 @@ ulong OpenInitialPosition(string requiredSymbol,
    bool  placed     = false;
    ulong pos_ticket = 0;
 
+   double normalized_lostSize = NormalizeLot(requiredSymbol, lotSize);
    if(actionType == 0) {
-      placed = trade.Buy(lotSize, requiredSymbol, 0.0, 0.0, 0.0, comment);
+      placed = trade.Buy(normalized_lostSize, requiredSymbol, 0.0, 0.0, 0.0, comment);
    } else {
-      placed = trade.Sell(lotSize, requiredSymbol, 0.0, 0.0, 0.0, comment);
+      placed = trade.Sell(normalized_lostSize, requiredSymbol, 0.0, 0.0, 0.0, comment);
    }
 
    if(!placed) {
@@ -303,4 +304,24 @@ int PointsDiff(double lastPrice, double firstPrice, string symbol) {
       // eg: +5.3 -> +6.0
       return (int)MathCeil(pts);
    }
+}
+
+double GetPositionCost(ulong &tickets[], double &positionCost) {
+   double totalPositionVolume = 0;
+   double totalPositionCost   = 0;
+   for(int i = 0; i < ArraySize(tickets); i++) {
+      ulong ticket = tickets[i];
+      // select the position and with the same symbol
+      if(PositionSelectByTicket(ticket)) {
+         double volume        = PositionGetDouble(POSITION_VOLUME);
+         double entryPrice    = PositionGetDouble(POSITION_PRICE_OPEN);
+         totalPositionVolume += volume;
+         totalPositionCost   += entryPrice * volume;
+      }
+   }
+   // assign position cost
+   if(totalPositionVolume > 0) {
+      positionCost = totalPositionCost / totalPositionVolume;
+   }
+   return totalPositionVolume;
 }

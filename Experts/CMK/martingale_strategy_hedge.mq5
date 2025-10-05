@@ -24,7 +24,7 @@ input int    i_sleepDays           = 120;    // after stop loss / no margin, the
 // strategy constant
 string Symbols[]           = {"AUDNZD"};   // , "AUDUSD", "GBPUSD", "EURGBP"
 int    RSIPeriod[]         = {14, 14, 14, 14};
-int    HedgingAfterDays[]  = {5, 10, 10, 10};           // condition of hedging: days after first opened position being hold
+int    HedgingAfterDays[]  = {5, 10, 10, 10};            // condition of hedging: days after first opened position being hold
 double HedgingMultiplier[] = {1.05, 1.05, 1.05, 1.05};   // The hedging mechanism will operate at this multiple in order to accelerate the completion of a position that has been maintained for a long time.
 int    GridStepPoints[]    = {50, 50, 50, 50};
 int    BreakEvenTPPips[]   = {200, 200, 200, 200};
@@ -32,7 +32,7 @@ int    SymbolTotal         = ArraySize(Symbols);
 
 // strategy variables
 int      v_hedgingLevels[ArraySize(Symbols)][2];      // storate of the hedging level, 0 means the basic
-int      v_accumPips[ArraySize(Symbols)][2];          // accumulative points being earning
+int      v_accumEarnedPips[ArraySize(Symbols)][2];    // accumulative points being earning
 datetime v_positionOpenDate[ArraySize(Symbols)][2];   // the opening date that position begin
 datetime v_backToTradeUntil[ArraySize(Symbols)];      // continue to trade after this date
 double   v_actionGridSteps[ArraySize(Symbols)];
@@ -59,8 +59,8 @@ int OnInit() {
       v_hedgingLevels[symbolIndex][0] = 0;   // start with level 0
       v_hedgingLevels[symbolIndex][1] = 0;   // start with level 0
       // set the profit pips
-      v_accumPips[symbolIndex][0] = 0;
-      v_accumPips[symbolIndex][1] = 0;
+      v_accumEarnedPips[symbolIndex][0] = 0;
+      v_accumEarnedPips[symbolIndex][1] = 0;
       // set the digit number
       v_digits_numbers[symbolIndex] = (int)SymbolInfoInteger(Symbols[symbolIndex], SYMBOL_DIGITS);
    }
@@ -131,14 +131,15 @@ void RunTradingStrategy(int symbolIndex, int actionType) {
 
    // ----- check if need to increase the level
    // get the magic number (current hedging level)
-   ulong magic = Encode3_Bytes(symbolIndex, actionType, v_hedgingLevels[symbolIndex][actionType]);
-   // first date of magic
-   long   lastMagic_openTime = GetFirstMagicDate(symbolIndex, actionType, v_hedgingLevels[symbolIndex][actionType]);
-   double diffDays           = GetDifferenceDays(lastMagic_openTime);
-   if(GetDifferenceDays(lastMagic_openTime) >= HedgingAfterDays[symbolIndex]) {
-      datetime t = (datetime)(lastMagic_openTime / 1000);
+   int   current_level = v_hedgingLevels[symbolIndex][actionType];
+   ulong magic         = Encode3_Bytes(symbolIndex, actionType, current_level);
+   // first date of holding position
+   long   last_openTime = GetFirstMagicDate(symbolIndex, actionType, 0);
+   double diffDays      = GetDifferenceDays(last_openTime);
+   if(GetDifferenceDays(last_openTime) >= HedgingAfterDays[symbolIndex] * (current_level + 1)) {
+      datetime t = (datetime)(last_openTime / 1000);
 
-      Print("GetDifferenceDays(lastMagic_openTime): ", GetDifferenceDays(lastMagic_openTime), " - ", TimeToString(t, TIME_DATE | TIME_SECONDS));
+      Print("GetDifferenceDays(last_openTime): ", GetDifferenceDays(last_openTime), " - ", TimeToString(t, TIME_DATE | TIME_SECONDS));
       // ----- level-up
       v_hedgingLevels[symbolIndex][actionType]++;
       int level_actionType = GetActionType_byLevel(actionType, v_hedgingLevels[symbolIndex][actionType]);
@@ -149,21 +150,30 @@ void RunTradingStrategy(int symbolIndex, int actionType) {
    }
 
    // ----- into the market (buy / sell) in each level
+   int balanacePip = 0;
    for(int level = 0; level < v_hedgingLevels[symbolIndex][actionType] + 1; level++) {
+      bool closed = false;
       // check the grid level
       CheckGridLevels(symbolIndex, actionType, level);
       // ----- take profit by level
-      int earnedPip                        = SetBreakEvenTP(symbolIndex, actionType, level);
-      v_accumPips[symbolIndex][actionType] = v_accumPips[symbolIndex][actionType] + earnedPip;
+      int earnedPip = SetBreakEvenTP(symbolIndex, actionType, level, closed);
+      if(closed) {
+         v_accumEarnedPips[symbolIndex][actionType] = v_accumEarnedPips[symbolIndex][actionType] + earnedPip;
+      } else {
+         balanacePip += earnedPip;
+      }
    }
 
    // ----- check overall accumPips meet target, if so, close all the positions
-   if(v_accumPips[symbolIndex][actionType] >= BreakEvenTPPips[symbolIndex]) {
+
+   if((balanacePip + v_accumEarnedPips[symbolIndex][actionType]) >= BreakEvenTPPips[symbolIndex]) {
       ulong nr_tickets[];
       GetConditionalTickets(nr_tickets, symbolIndex, actionType);
-      CloseAllTickets(nr_tickets);
-      v_hedgingLevels[symbolIndex][actionType] = 0;   // reset to level 0
-      v_accumPips[symbolIndex][actionType]     = 0;
+      if(ArraySize(nr_tickets) > 0) {
+         CloseAllTickets(nr_tickets);
+         v_hedgingLevels[symbolIndex][actionType]   = 0;   // reset to level 0
+         v_accumEarnedPips[symbolIndex][actionType] = 0;
+      }
    }
 }
 
@@ -227,14 +237,6 @@ void CheckGridLevels(int symbolIndex, int actionType, int level) {
          // get normalized bid price
          currentPrice = NormalizeDouble(SymbolInfoDouble(Symbols[symbolIndex], SYMBOL_BID), v_digits_numbers[symbolIndex]);
       }
-      // int ptDiff;
-      // if(level_actionType == 0) {
-      //    ptDiff = PointsBetween(nextGridPrice, SymbolInfoDouble(Symbols[symbolIndex], SYMBOL_ASK), Symbols[symbolIndex]);
-      //    Print("nextGridPrice, SymbolInfoDouble(Symbols[symbolIndex], SYMBOL_ASK), SymbolInfoDouble(sym, SYMBOL_POINT), ptDiff: ", nextGridPrice, ", ", SymbolInfoDouble(Symbols[symbolIndex], SYMBOL_BID), ", ", SymbolInfoDouble(Symbols[symbolIndex], SYMBOL_POINT), ", ", ptDiff);
-      // } else {
-      //    ptDiff = PointsBetween(nextGridPrice, SymbolInfoDouble(Symbols[symbolIndex], SYMBOL_BID), Symbols[symbolIndex]);
-      //    Print("nextGridPrice, SymbolInfoDouble(Symbols[symbolIndex], SYMBOL_ASK), SymbolInfoDouble(sym, SYMBOL_POINT), ptDiff: ", nextGridPrice, ", ", SymbolInfoDouble(Symbols[symbolIndex], SYMBOL_ASK), ", ", SymbolInfoDouble(Symbols[symbolIndex], SYMBOL_POINT), ", ", ptDiff);
-      // }
 
       if((level_actionType == 0 && currentPrice <= nextGridPrice) || (level_actionType == 1 && currentPrice >= nextGridPrice)) {
          // new lot size
@@ -270,62 +272,54 @@ void CheckGridLevels(int symbolIndex, int actionType, int level) {
 }
 
 // calculate the break even point account with profit token
-int SetBreakEvenTP(int symbolIndex, int actionType, int level) {
+int SetBreakEvenTP(int symbolIndex, int actionType, int level, bool &closed) {
+
+   // ----- calculate the buy cost
+   // getting the magic number
+   // int    current_level = v_hedgingLevels[symbolIndex][actionType];
    int                     level_actionType = GetActionType_byLevel(actionType, level);
+   ulong                   magic            = Encode3_Bytes(symbolIndex, actionType, level);
    ENUM_SYMBOL_INFO_DOUBLE symbol_bidask;
+   ulong                   requiredTickets[];
+   double                  positionCost = 0.0;
+   double                  breakEvenPrice;
+   double                  breakEvenTPs;
+   double                  current_bidAsk;
+   int                     targetPip = 0;
    if(level_actionType == 0) {
       symbol_bidask = SYMBOL_BID;
    } else {
       symbol_bidask = SYMBOL_ASK;
    }
-   double totalPositionVolume = 0;
-   double totalPositionCost   = 0;
-   int    current_level       = v_hedgingLevels[symbolIndex][actionType];
-
-   // ----- calculate the buy cost
-   // getting the magic number
-   ulong magic = Encode3_Bytes(symbolIndex, actionType, level);
-   ulong requiredTickets[];
    GetTickets_ByMagic(requiredTickets, magic);
-   for(int i = 0; i < ArraySize(requiredTickets); i++) {
-      ulong ticket = requiredTickets[i];
-      // select the position and with the same symbol
-      if(PositionSelectByTicket(ticket)) {
-         double volume        = PositionGetDouble(POSITION_VOLUME);
-         double entryPrice    = PositionGetDouble(POSITION_PRICE_OPEN);
-         totalPositionVolume += volume;
-         totalPositionCost   += entryPrice * volume;
-      }
-   }
-   double breakEvenPrice;
-   double breakEvenTPs;
-   double current_bidAsk;
-   int    targetPip = 0;
+   double totalPositionVolume = GetPositionCost(requiredTickets, positionCost);
    if(totalPositionVolume > 0) {
-      double positionCost = totalPositionCost / totalPositionVolume;
-      targetPip           = (int)MathCeil(BreakEvenTPPips[symbolIndex] * MathPow(HedgingMultiplier[symbolIndex], level));
-      breakEvenTPs        = targetPip * SymbolInfoDouble(Symbols[symbolIndex], SYMBOL_POINT);   // eg: 200 * 0.00001 = 0.02
+      targetPip    = (int)MathCeil(BreakEvenTPPips[symbolIndex] * MathPow(HedgingMultiplier[symbolIndex], level));
+      breakEvenTPs = targetPip * SymbolInfoDouble(Symbols[symbolIndex], SYMBOL_POINT);   // eg: 200 * 0.00001 = 0.02
       if(level_actionType == 0) {
          breakEvenPrice = NormalizeDouble(positionCost + breakEvenTPs, v_digits_numbers[symbolIndex]);
       } else {
          breakEvenPrice = NormalizeDouble(positionCost - breakEvenTPs, v_digits_numbers[symbolIndex]);
       }
       current_bidAsk = NormalizeDouble(SymbolInfoDouble(Symbols[symbolIndex], symbol_bidask), v_digits_numbers[symbolIndex]);
+
       if((level_actionType == 0 && current_bidAsk >= breakEvenPrice) ||
          (level_actionType == 1 && current_bidAsk <= breakEvenPrice)) {
          Print("-------------------------------");
-         Print("totalPositionCost: ", totalPositionCost, " totalPositionVolume: ", totalPositionVolume, " (totalPositionCost / totalPositionVolume): ", (totalPositionCost / totalPositionVolume));
+         Print(" (totalPositionCost / totalPositionVolume): ", positionCost);
          // string nowStr = TimeToString(TimeCurrent());
          // string filename = "logFile" + "_" + nowStr + ".csv";
 
          Print("TERMINAL_COMMONDATA_PATH: ", TerminalInfoString(TERMINAL_COMMONDATA_PATH) + "/" + filename);
          FileSeek(spreadSheetHandler, 0, SEEK_END);
-         FileWrite(spreadSheetHandler, DoubleToString(totalPositionCost), DoubleToString(totalPositionVolume), DoubleToString((totalPositionCost / totalPositionVolume)));
+         FileWrite(spreadSheetHandler, DoubleToString(positionCost));
 
          // WriteCsv(filename, cols, values);
          CloseAllPositions("", NULL, true, magic);
+         closed = true;
          Print("-------------------------------");
       }
+      // calculate the point difference
       int ptDiff;
       if(level_actionType == 0) {
          ptDiff = PointsDiff(current_bidAsk, positionCost, Symbols[symbolIndex]);
