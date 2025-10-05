@@ -152,12 +152,12 @@ void RunTradingStrategy(int symbolIndex, int main_actionType) {
    // ----- into the market (buy / sell) in each level
    int balanacePip = 0;
    for(int level = 0; level < v_hedgingLevels[symbolIndex][main_actionType] + 1; level++) {
-      bool closed = false;
+      bool targetMeet = false;
       // check the grid level
       CheckGridLevels(symbolIndex, main_actionType, level);
       // ----- take profit by level
-      int earnedPip = SetBreakEvenTP(symbolIndex, main_actionType, level, closed);
-      if(closed) {
+      int earnedPip = SetBreakEvenTP_level(targetMeet, symbolIndex, main_actionType, level);
+      if(targetMeet) {
          v_accumEarnedPips[symbolIndex][main_actionType] = v_accumEarnedPips[symbolIndex][main_actionType] + earnedPip;
       } else {
          balanacePip += earnedPip;
@@ -272,39 +272,47 @@ void CheckGridLevels(int symbolIndex, int main_actionType, int level) {
 }
 
 // calculate the break even point account with profit token
-int SetBreakEvenTP(int symbolIndex, int main_actionType, int level, bool &closed) {
+int SetBreakEvenTP_level(bool &targetMeet, int symbolIndex, int main_actionType, int level) {
+   // get the action type
+   int sub_actionType = GetActionType_byLevel(main_actionType, level);
+   // // get the magic number
+   // ulong magic = Encode3_Bytes(symbolIndex, main_actionType, level);
+   // // get the required tickets
+   // ulong requiredTickets[];
+   // GetTickets_ByMagic(requiredTickets, magic);
+   ulong requiredTickets[];
+   GetConditionalTickets(requiredTickets, symbolIndex, main_actionType, level);
+   int earnedPip = CheckBreakEvenTP(targetMeet, requiredTickets, symbolIndex, sub_actionType);
+   return earnedPip;
+}
 
-   // ----- calculate the buy cost
-   // getting the magic number
-   // int    current_level = v_hedgingLevels[symbolIndex][main_actionType];
-   int                     sub_actionType = GetActionType_byLevel(main_actionType, level);
-   ulong                   magic          = Encode3_Bytes(symbolIndex, main_actionType, level);
+int CheckBreakEvenTP(bool &targetMeet, ulong &requiredTickets[], int symbolIndex, int tickets_actionType) {
+
    ENUM_SYMBOL_INFO_DOUBLE symbol_bidask;
-   ulong                   requiredTickets[];
-   double                  positionCost = 0.0;
-   double                  breakEvenPrice;
-   double                  breakEvenTPs;
-   double                  current_bidAsk;
-   int                     targetPip = 0;
-   if(sub_actionType == 0) {
+   if(tickets_actionType == 0) {
       symbol_bidask = SYMBOL_BID;
    } else {
       symbol_bidask = SYMBOL_ASK;
    }
-   GetTickets_ByMagic(requiredTickets, magic);
+
+   // ----- calculate the buy cost
+   double positionCost        = 0.0;
    double totalPositionVolume = GetPositionCost(requiredTickets, positionCost);
+
+   // if there are positions existed
    if(totalPositionVolume > 0) {
-      targetPip    = (int)MathCeil(BreakEvenTPPips[symbolIndex] * MathPow(HedgingMultiplier[symbolIndex], level));
-      breakEvenTPs = targetPip * SymbolInfoDouble(Symbols[symbolIndex], SYMBOL_POINT);   // eg: 200 * 0.00001 = 0.02
-      if(sub_actionType == 0) {
+      double breakEvenPrice;
+      int    targetPip    = (int)MathCeil(BreakEvenTPPips[symbolIndex]);
+      double breakEvenTPs = targetPip * SymbolInfoDouble(Symbols[symbolIndex], SYMBOL_POINT);   // eg: 200 * 0.00001 = 0.02
+      if(tickets_actionType == 0) {
          breakEvenPrice = NormalizeDouble(positionCost + breakEvenTPs, v_digits_numbers[symbolIndex]);
       } else {
          breakEvenPrice = NormalizeDouble(positionCost - breakEvenTPs, v_digits_numbers[symbolIndex]);
       }
-      current_bidAsk = NormalizeDouble(SymbolInfoDouble(Symbols[symbolIndex], symbol_bidask), v_digits_numbers[symbolIndex]);
+      double current_bidAsk = NormalizeDouble(SymbolInfoDouble(Symbols[symbolIndex], symbol_bidask), v_digits_numbers[symbolIndex]);
 
-      if((sub_actionType == 0 && current_bidAsk >= breakEvenPrice) ||
-         (sub_actionType == 1 && current_bidAsk <= breakEvenPrice)) {
+      if((tickets_actionType == 0 && current_bidAsk >= breakEvenPrice) ||
+         (tickets_actionType == 1 && current_bidAsk <= breakEvenPrice)) {
          Print("-------------------------------");
          Print(" (totalPositionCost / totalPositionVolume): ", positionCost);
 
@@ -314,12 +322,12 @@ int SetBreakEvenTP(int symbolIndex, int main_actionType, int level, bool &closed
 
          // WriteCsv(filename, cols, values);
          CloseAllTickets(requiredTickets);
-         closed = true;
+         targetMeet = true;
          Print("-------------------------------");
       }
       // calculate the point difference
       int ptDiff;
-      if(sub_actionType == 0) {
+      if(tickets_actionType == 0) {
          ptDiff = PointsDiff(current_bidAsk, positionCost, Symbols[symbolIndex]);
       } else {
          ptDiff = PointsDiff(positionCost, current_bidAsk, Symbols[symbolIndex]);
