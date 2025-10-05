@@ -31,3 +31,6 @@ datetime AddDate(datetime currDate, int daysToChange) {
    datetime newDate = currDate + (daysToChange * 86400);   // Add 5 days
    return newDate;
 }
+
+// string nowStr = TimeToString(TimeCurrent());
+// string filename = "logFile" + "_" + nowStr + ".csv";

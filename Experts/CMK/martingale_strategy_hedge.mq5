@@ -115,50 +115,50 @@ void InitializeVariables(int symbolIndex) {
 }
 
 // run required strategy
-void RunTradingStrategy(int symbolIndex, int actionType) {
-   string actionType_word = actionType == 0 ? "Buy" : "Sell";
+void RunTradingStrategy(int symbolIndex, int main_actionType) {
+   string actionType_word = main_actionType == 0 ? "Buy" : "Sell";
    // ----- check if buy / sell position holding
    ulong nr_tickets[];
-   GetConditionalTickets(nr_tickets, symbolIndex, actionType);
+   GetConditionalTickets(nr_tickets, symbolIndex, main_actionType);
    // Open inital buy / sell position if no buy / sell positions
    if(ArraySize(nr_tickets) == 0 && TimeCurrent() >= v_backToTradeUntil[symbolIndex]) {
       // setting the magic number (setting in global)
-      ulong magic = Encode3_Bytes(symbolIndex, actionType, v_hedgingLevels[symbolIndex][actionType]);
+      ulong magic = Encode3_Bytes(symbolIndex, main_actionType, v_hedgingLevels[symbolIndex][main_actionType]);
       // initial position
-      string comment = "Initial " + actionType_word + " level - " + IntegerToString(v_hedgingLevels[symbolIndex][actionType]);
-      OpenInitialPosition(Symbols[symbolIndex], i_initialLotSize, actionType, magic, comment);
+      string comment = "Initial " + actionType_word + " level - " + IntegerToString(v_hedgingLevels[symbolIndex][main_actionType]);
+      OpenInitialPosition(Symbols[symbolIndex], i_initialLotSize, main_actionType, magic, comment);
    }
 
    // ----- check if need to increase the level
    // get the magic number (current hedging level)
-   int   current_level = v_hedgingLevels[symbolIndex][actionType];
-   ulong magic         = Encode3_Bytes(symbolIndex, actionType, current_level);
+   int   current_level = v_hedgingLevels[symbolIndex][main_actionType];
+   ulong magic         = Encode3_Bytes(symbolIndex, main_actionType, current_level);
    // first date of holding position
-   long   last_openTime = GetFirstMagicDate(symbolIndex, actionType, 0);
+   long   last_openTime = GetFirstMagicDate(symbolIndex, main_actionType, 0);
    double diffDays      = GetDifferenceDays(last_openTime);
    if(GetDifferenceDays(last_openTime) >= HedgingAfterDays[symbolIndex] * (current_level + 1)) {
       datetime t = (datetime)(last_openTime / 1000);
 
       Print("GetDifferenceDays(last_openTime): ", GetDifferenceDays(last_openTime), " - ", TimeToString(t, TIME_DATE | TIME_SECONDS));
       // ----- level-up
-      v_hedgingLevels[symbolIndex][actionType]++;
-      int level_actionType = GetActionType_byLevel(actionType, v_hedgingLevels[symbolIndex][actionType]);
+      v_hedgingLevels[symbolIndex][main_actionType]++;
+      int sub_actionType = GetActionType_byLevel(main_actionType, v_hedgingLevels[symbolIndex][main_actionType]);
       // initial level position
-      ulong  magic   = Encode3_Bytes(symbolIndex, actionType, v_hedgingLevels[symbolIndex][actionType]);
-      string comment = "Initial " + actionType_word + " level - " + IntegerToString(v_hedgingLevels[symbolIndex][actionType]);
-      OpenInitialPosition(Symbols[symbolIndex], i_initialLotSize * HedgingMultiplier[symbolIndex], level_actionType, magic, comment);
+      ulong  magic   = Encode3_Bytes(symbolIndex, main_actionType, v_hedgingLevels[symbolIndex][main_actionType]);
+      string comment = "Initial " + actionType_word + " level - " + IntegerToString(v_hedgingLevels[symbolIndex][main_actionType]);
+      OpenInitialPosition(Symbols[symbolIndex], i_initialLotSize * HedgingMultiplier[symbolIndex], sub_actionType, magic, comment);
    }
 
    // ----- into the market (buy / sell) in each level
    int balanacePip = 0;
-   for(int level = 0; level < v_hedgingLevels[symbolIndex][actionType] + 1; level++) {
+   for(int level = 0; level < v_hedgingLevels[symbolIndex][main_actionType] + 1; level++) {
       bool closed = false;
       // check the grid level
-      CheckGridLevels(symbolIndex, actionType, level);
+      CheckGridLevels(symbolIndex, main_actionType, level);
       // ----- take profit by level
-      int earnedPip = SetBreakEvenTP(symbolIndex, actionType, level, closed);
+      int earnedPip = SetBreakEvenTP(symbolIndex, main_actionType, level, closed);
       if(closed) {
-         v_accumEarnedPips[symbolIndex][actionType] = v_accumEarnedPips[symbolIndex][actionType] + earnedPip;
+         v_accumEarnedPips[symbolIndex][main_actionType] = v_accumEarnedPips[symbolIndex][main_actionType] + earnedPip;
       } else {
          balanacePip += earnedPip;
       }
@@ -166,27 +166,27 @@ void RunTradingStrategy(int symbolIndex, int actionType) {
 
    // ----- check overall accumPips meet target, if so, close all the positions
 
-   if((balanacePip + v_accumEarnedPips[symbolIndex][actionType]) >= BreakEvenTPPips[symbolIndex]) {
+   if((balanacePip + v_accumEarnedPips[symbolIndex][main_actionType]) >= BreakEvenTPPips[symbolIndex]) {
       ulong nr_tickets[];
-      GetConditionalTickets(nr_tickets, symbolIndex, actionType);
+      GetConditionalTickets(nr_tickets, symbolIndex, main_actionType);
       if(ArraySize(nr_tickets) > 0) {
          CloseAllTickets(nr_tickets);
-         v_hedgingLevels[symbolIndex][actionType]   = 0;   // reset to level 0
-         v_accumEarnedPips[symbolIndex][actionType] = 0;
+         v_hedgingLevels[symbolIndex][main_actionType]   = 0;   // reset to level 0
+         v_accumEarnedPips[symbolIndex][main_actionType] = 0;
       }
    }
 }
 
 // check the grid level and if good to buy, 0 = buy; 1 = sell
-void CheckGridLevels(int symbolIndex, int actionType, int level) {
-   int                level_actionType = GetActionType_byLevel(actionType, level);
+void CheckGridLevels(int symbolIndex, int main_actionType, int level) {
+   int                sub_actionType = GetActionType_byLevel(main_actionType, level);
    double             lastEntryPrice;
    string             long_short_wording;
    ENUM_POSITION_TYPE positionType;
    ENUM_ORDER_TYPE    orderType;
    int                nr_positions = 0;
    // setting condition
-   if(level_actionType == 0) {
+   if(sub_actionType == 0) {
       lastEntryPrice     = DBL_MAX;
       positionType       = POSITION_TYPE_BUY;
       orderType          = ORDER_TYPE_BUY;
@@ -201,7 +201,7 @@ void CheckGridLevels(int symbolIndex, int actionType, int level) {
    // calculate how many level to be concat
    ulong tickets[];
    // getting require magic
-   ulong magic = Encode3_Bytes(symbolIndex, actionType, level);
+   ulong magic = Encode3_Bytes(symbolIndex, main_actionType, level);
    GetTickets_ByMagic(tickets, magic);
    for(int i = 0; i < ArraySize(tickets); i++) {
       ulong ticket = tickets[i];
@@ -209,11 +209,11 @@ void CheckGridLevels(int symbolIndex, int actionType, int level) {
       if(PositionSelectByTicket(ticket)) {
          // get the position entry price
          double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-         if(level_actionType == 0 && entryPrice < lastEntryPrice) {
+         if(sub_actionType == 0 && entryPrice < lastEntryPrice) {
             lastEntryPrice = entryPrice;
             // level of positions
             nr_positions++;
-         } else if(level_actionType == 1 && entryPrice > lastEntryPrice) {
+         } else if(sub_actionType == 1 && entryPrice > lastEntryPrice) {
             lastEntryPrice = entryPrice;
             // level of positions
             nr_positions++;
@@ -225,8 +225,8 @@ void CheckGridLevels(int symbolIndex, int actionType, int level) {
       double nextGridPrice;
       double currentPrice;
       // setting the magic number (setting in global)
-      trade.SetExpertMagicNumber(Encode3_Bytes(symbolIndex, actionType, level));
-      if(level_actionType == 0) {
+      trade.SetExpertMagicNumber(Encode3_Bytes(symbolIndex, main_actionType, level));
+      if(sub_actionType == 0) {
          // calculate the next grid buying price
          nextGridPrice = NormalizeDouble(lastEntryPrice - (v_actionGridSteps[symbolIndex]) * MathPow(i_gridStepMultiplier, nr_positions), v_digits_numbers[symbolIndex]);
          // get normalized ask price
@@ -238,10 +238,10 @@ void CheckGridLevels(int symbolIndex, int actionType, int level) {
          currentPrice = NormalizeDouble(SymbolInfoDouble(Symbols[symbolIndex], SYMBOL_BID), v_digits_numbers[symbolIndex]);
       }
 
-      if((level_actionType == 0 && currentPrice <= nextGridPrice) || (level_actionType == 1 && currentPrice >= nextGridPrice)) {
+      if((sub_actionType == 0 && currentPrice <= nextGridPrice) || (sub_actionType == 1 && currentPrice >= nextGridPrice)) {
          // new lot size
          // increase the initial lot based on the level
-         double newLotSize = i_initialLotSize * MathPow(HedgingMultiplier[symbolIndex], v_hedgingLevels[symbolIndex][level_actionType]) * MathPow(i_lotMultiplier, nr_positions);
+         double newLotSize = i_initialLotSize * MathPow(HedgingMultiplier[symbolIndex], v_hedgingLevels[symbolIndex][sub_actionType]) * MathPow(i_lotMultiplier, nr_positions);
          newLotSize        = NormalizeLot(Symbols[symbolIndex], newLotSize);
 
          // check required margin
@@ -256,9 +256,9 @@ void CheckGridLevels(int symbolIndex, int actionType, int level) {
          }
 
          // take action
-         string master_actionType_word = actionType == 0 ? "Buy" : "Sell";
+         string master_actionType_word = main_actionType == 0 ? "Buy" : "Sell";
 
-         if(level_actionType == 0) {
+         if(sub_actionType == 0) {
             if(!trade.Buy(newLotSize, Symbols[symbolIndex], currentPrice, 0, 0, "Grid " + master_actionType_word + " level - " + IntegerToString(level))) {
                Print("Grid buy error: ", GetLastError());
             }
@@ -272,13 +272,13 @@ void CheckGridLevels(int symbolIndex, int actionType, int level) {
 }
 
 // calculate the break even point account with profit token
-int SetBreakEvenTP(int symbolIndex, int actionType, int level, bool &closed) {
+int SetBreakEvenTP(int symbolIndex, int main_actionType, int level, bool &closed) {
 
    // ----- calculate the buy cost
    // getting the magic number
-   // int    current_level = v_hedgingLevels[symbolIndex][actionType];
-   int                     level_actionType = GetActionType_byLevel(actionType, level);
-   ulong                   magic            = Encode3_Bytes(symbolIndex, actionType, level);
+   // int    current_level = v_hedgingLevels[symbolIndex][main_actionType];
+   int                     sub_actionType = GetActionType_byLevel(main_actionType, level);
+   ulong                   magic          = Encode3_Bytes(symbolIndex, main_actionType, level);
    ENUM_SYMBOL_INFO_DOUBLE symbol_bidask;
    ulong                   requiredTickets[];
    double                  positionCost = 0.0;
@@ -286,7 +286,7 @@ int SetBreakEvenTP(int symbolIndex, int actionType, int level, bool &closed) {
    double                  breakEvenTPs;
    double                  current_bidAsk;
    int                     targetPip = 0;
-   if(level_actionType == 0) {
+   if(sub_actionType == 0) {
       symbol_bidask = SYMBOL_BID;
    } else {
       symbol_bidask = SYMBOL_ASK;
@@ -296,32 +296,30 @@ int SetBreakEvenTP(int symbolIndex, int actionType, int level, bool &closed) {
    if(totalPositionVolume > 0) {
       targetPip    = (int)MathCeil(BreakEvenTPPips[symbolIndex] * MathPow(HedgingMultiplier[symbolIndex], level));
       breakEvenTPs = targetPip * SymbolInfoDouble(Symbols[symbolIndex], SYMBOL_POINT);   // eg: 200 * 0.00001 = 0.02
-      if(level_actionType == 0) {
+      if(sub_actionType == 0) {
          breakEvenPrice = NormalizeDouble(positionCost + breakEvenTPs, v_digits_numbers[symbolIndex]);
       } else {
          breakEvenPrice = NormalizeDouble(positionCost - breakEvenTPs, v_digits_numbers[symbolIndex]);
       }
       current_bidAsk = NormalizeDouble(SymbolInfoDouble(Symbols[symbolIndex], symbol_bidask), v_digits_numbers[symbolIndex]);
 
-      if((level_actionType == 0 && current_bidAsk >= breakEvenPrice) ||
-         (level_actionType == 1 && current_bidAsk <= breakEvenPrice)) {
+      if((sub_actionType == 0 && current_bidAsk >= breakEvenPrice) ||
+         (sub_actionType == 1 && current_bidAsk <= breakEvenPrice)) {
          Print("-------------------------------");
          Print(" (totalPositionCost / totalPositionVolume): ", positionCost);
-         // string nowStr = TimeToString(TimeCurrent());
-         // string filename = "logFile" + "_" + nowStr + ".csv";
 
          Print("TERMINAL_COMMONDATA_PATH: ", TerminalInfoString(TERMINAL_COMMONDATA_PATH) + "/" + filename);
          FileSeek(spreadSheetHandler, 0, SEEK_END);
          FileWrite(spreadSheetHandler, DoubleToString(positionCost));
 
          // WriteCsv(filename, cols, values);
-         CloseAllPositions("", NULL, true, magic);
+         CloseAllTickets(requiredTickets);
          closed = true;
          Print("-------------------------------");
       }
       // calculate the point difference
       int ptDiff;
-      if(level_actionType == 0) {
+      if(sub_actionType == 0) {
          ptDiff = PointsDiff(current_bidAsk, positionCost, Symbols[symbolIndex]);
       } else {
          ptDiff = PointsDiff(positionCost, current_bidAsk, Symbols[symbolIndex]);
@@ -350,9 +348,9 @@ double lotExp(int nr_buy_positions) {
 }
 
 // getting the first position date
-long GetFirstMagicDate(int symbolIndex, int actionType, int level) {
+long GetFirstMagicDate(int symbolIndex, int main_actionType, int level) {
    ulong tickets[];
-   GetConditionalTickets(tickets, symbolIndex, actionType, level);
+   GetConditionalTickets(tickets, symbolIndex, main_actionType, level);
    long openTime = INT_MAX;
    for(int i = 0; i < ArraySize(tickets); i++) {
       if(PositionSelectByTicket(tickets[i])) {
@@ -375,18 +373,19 @@ double GetDifferenceDays(long firstDate, long lastDate = NULL) {
 }
 
 // get the new action type by the level
-int GetActionType_byLevel(int actionType, int level) {
-   // if %2 residual value, used original actionType
-   int newActionType;
+int GetActionType_byLevel(int main_actionType, int level) {
+   // if %2 residual value, used original main_actionType
+   int sub_actionType;
    if(level % 2 == 0) {
-      newActionType = actionType;
+      sub_actionType = main_actionType;
    } else {
-      newActionType = actionType == 0 ? 1 : 0;
+      sub_actionType = main_actionType == 0 ? 1 : 0;
    }
-   return newActionType;
+   return sub_actionType;
 }
 
-void GetConditionalTickets(ulong &tickets[], int symbolIndex = -1, int actionType = -1, int level = -1) {
+// get required condition by below arguments
+void GetConditionalTickets(ulong &tickets[], int symbolIndex = -1, int main_actionType = -1, int level = -1, int sub_actionType = -1) {
    // reset the tickets array
    ArrayResize(tickets, 0);
 
@@ -397,22 +396,28 @@ void GetConditionalTickets(ulong &tickets[], int symbolIndex = -1, int actionTyp
          continue;
       if(!PositionSelectByTicket(tk))
          continue;
-      int  pos_symbolIndex;
-      int  pos_actionType;
-      int  pos_level;
+      int  _symbolIndex;
+      int  _main_actionType;
+      int  _level;
       long posMagic = PositionGetInteger(POSITION_MAGIC);
-      Decode3_Bytes((int)posMagic, pos_symbolIndex, pos_actionType, pos_level);
+      Decode3_Bytes((int)posMagic, _symbolIndex, _main_actionType, _level);
       if(symbolIndex != -1) {
-         if(pos_symbolIndex != symbolIndex)
+         if(_symbolIndex != symbolIndex)
             continue;
       }
-      if(actionType != -1) {
-         if(pos_actionType != actionType)
+      if(main_actionType != -1) {
+         if(_main_actionType != main_actionType)
             continue;
       }
       if(level != -1) {
-         if(pos_level != level)
+         if(_level != level)
             continue;
+      }
+      if(sub_actionType != -1) {
+         if((sub_actionType == 0 && PositionGetInteger(POSITION_TYPE) != POSITION_TYPE_BUY) ||
+            (sub_actionType == 1 && PositionGetInteger(POSITION_TYPE) != POSITION_TYPE_SELL)) {
+            continue;
+         }
       }
       int n = ArraySize(tickets);
       ArrayResize(tickets, n + 1);

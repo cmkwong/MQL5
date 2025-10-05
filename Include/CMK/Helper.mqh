@@ -104,6 +104,7 @@ int GetTickets_ByMagic(ulong &tickets[], ulong magic, bool includePending = fals
    return ArraySize(tickets);
 }
 
+// close all position by tickets
 int CloseAllTickets(ulong &tickets[]) {
    CTrade trade;
    int    closed = 0;
@@ -306,13 +307,25 @@ int PointsDiff(double lastPrice, double firstPrice, string symbol) {
    }
 }
 
+// must be same position type
 double GetPositionCost(ulong &tickets[], double &positionCost) {
+   // let the first position is the direction
+   ulong  _positionType       = 0;
    double totalPositionVolume = 0;
    double totalPositionCost   = 0;
    for(int i = 0; i < ArraySize(tickets); i++) {
       ulong ticket = tickets[i];
       // select the position and with the same symbol
       if(PositionSelectByTicket(ticket)) {
+         // checking to keep in same position type
+         if(i == 0) {
+            _positionType = PositionGetInteger(POSITION_TYPE);
+         } else {
+            if(_positionType != PositionGetInteger(POSITION_TYPE)) {
+               Print("GetPositionCost in which the tickets is not kept the same position type. ");
+               ExpertRemove();
+            }
+         }
          double volume        = PositionGetDouble(POSITION_VOLUME);
          double entryPrice    = PositionGetDouble(POSITION_PRICE_OPEN);
          totalPositionVolume += volume;
