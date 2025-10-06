@@ -156,7 +156,12 @@ void RunTradingStrategy(int symbolIndex, int main_actionType) {
       // check the grid level
       CheckGridLevels(symbolIndex, main_actionType, level);
       // ----- take profit by level
-      int earnedPip = SetBreakEvenTP_level(targetMeet, symbolIndex, main_actionType, level);
+      // get the action type
+      int sub_actionType = GetActionType_byLevel(main_actionType, level);
+      // get the required ticket based on level
+      ulong requiredTickets[];
+      GetConditionalTickets(requiredTickets, symbolIndex, main_actionType, level);
+      int earnedPip = CheckBreakEvenTP(targetMeet, requiredTickets, symbolIndex, sub_actionType);   // TODO: generalize into both direction: buy and short
       if(targetMeet) {
          v_accumEarnedPips[symbolIndex][main_actionType] = v_accumEarnedPips[symbolIndex][main_actionType] + earnedPip;
       } else {
@@ -165,7 +170,9 @@ void RunTradingStrategy(int symbolIndex, int main_actionType) {
    }
 
    // ----- check overall accumPips meet target, if so, close all the positions
-
+   // ulong requiredTickets[];
+   // GetConditionalTickets(requiredTickets, symbolIndex, main_actionType, level);
+   // int earnedPip = CheckBreakEvenTP(targetMeet, requiredTickets, symbolIndex, sub_actionType);
    if((balanacePip + v_accumEarnedPips[symbolIndex][main_actionType]) >= BreakEvenTPPips[symbolIndex]) {
       ulong nr_tickets[];
       GetConditionalTickets(nr_tickets, symbolIndex, main_actionType);
@@ -275,11 +282,7 @@ void CheckGridLevels(int symbolIndex, int main_actionType, int level) {
 int SetBreakEvenTP_level(bool &targetMeet, int symbolIndex, int main_actionType, int level) {
    // get the action type
    int sub_actionType = GetActionType_byLevel(main_actionType, level);
-   // // get the magic number
-   // ulong magic = Encode3_Bytes(symbolIndex, main_actionType, level);
-   // // get the required tickets
-   // ulong requiredTickets[];
-   // GetTickets_ByMagic(requiredTickets, magic);
+   // get the required ticket
    ulong requiredTickets[];
    GetConditionalTickets(requiredTickets, symbolIndex, main_actionType, level);
    int earnedPip = CheckBreakEvenTP(targetMeet, requiredTickets, symbolIndex, sub_actionType);
