@@ -278,18 +278,18 @@ void CheckGridLevels(int symbolIndex, int main_actionType, int level) {
    }
 }
 
-// calculate the break even point account with profit token
-int SetBreakEvenTP_level(bool &targetMeet, int symbolIndex, int main_actionType, int level) {
-   // get the action type
-   int sub_actionType = GetActionType_byLevel(main_actionType, level);
-   // get the required ticket
-   ulong requiredTickets[];
-   GetConditionalTickets(requiredTickets, symbolIndex, main_actionType, level);
-   int earnedPip = CheckBreakEvenTP(targetMeet, requiredTickets, symbolIndex, sub_actionType);
-   return earnedPip;
-}
+// // calculate the break even point account with profit token
+// int SetBreakEvenTP_level(bool &targetMeet, int symbolIndex, int main_actionType, int level) {
+//    // get the action type
+//    int sub_actionType = GetActionType_byLevel(main_actionType, level);
+//    // get the required ticket
+//    ulong requiredTickets[];
+//    GetConditionalTickets(requiredTickets, symbolIndex, main_actionType, level);
+//    int earnedPip = CheckBreakEvenTP(targetMeet, requiredTickets, symbolIndex, sub_actionType);
+//    return earnedPip;
+// }
 
-int CheckBreakEvenTP(bool &targetMeet, ulong &requiredTickets[], int symbolIndex, int tickets_actionType) {
+int CheckBreakEvenTP(bool &targetMeet, ulong &tickets[], int symbolIndex, int tickets_actionType) {
 
    ENUM_SYMBOL_INFO_DOUBLE symbol_bidask;
    if(tickets_actionType == 0) {
@@ -299,8 +299,8 @@ int CheckBreakEvenTP(bool &targetMeet, ulong &requiredTickets[], int symbolIndex
    }
 
    // ----- calculate the buy cost
-   double positionCost        = 0.0;
-   double totalPositionVolume = GetPositionCost(requiredTickets, positionCost);
+   double totalPositionVolume = 0.0;
+   double positionCost        = GetPositionCost(tickets, totalPositionVolume, tickets_actionType);
 
    // if there are positions existed
    if(totalPositionVolume > 0) {
@@ -318,13 +318,12 @@ int CheckBreakEvenTP(bool &targetMeet, ulong &requiredTickets[], int symbolIndex
          (tickets_actionType == 1 && current_bidAsk <= breakEvenPrice)) {
          Print("-------------------------------");
          Print(" (totalPositionCost / totalPositionVolume): ", positionCost);
-
          Print("TERMINAL_COMMONDATA_PATH: ", TerminalInfoString(TERMINAL_COMMONDATA_PATH) + "/" + filename);
          FileSeek(spreadSheetHandler, 0, SEEK_END);
          FileWrite(spreadSheetHandler, DoubleToString(positionCost));
 
          // WriteCsv(filename, cols, values);
-         CloseAllTickets(requiredTickets);
+         CloseAllTickets(tickets);
          targetMeet = true;
          Print("-------------------------------");
       }

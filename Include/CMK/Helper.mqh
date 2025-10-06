@@ -308,24 +308,21 @@ int PointsDiff(double lastPrice, double firstPrice, string symbol) {
 }
 
 // must be same position type
-double GetPositionCost(ulong &tickets[], double &positionCost) {
+double GetPositionCost(ulong &tickets[], double &totalPositionVolume, int tickets_actionType = 0) {
    // let the first position is the direction
-   ulong  _positionType       = 0;
-   double totalPositionVolume = 0;
-   double totalPositionCost   = 0;
+   ENUM_POSITION_TYPE _positionType;
+   if(tickets_actionType == 0) {
+      _positionType = POSITION_TYPE_BUY;
+   } else {
+      _positionType = POSITION_TYPE_SELL;
+   }
+   double positionCost      = 0.0;
+   double totalPositionCost = 0.0;
+   totalPositionVolume      = 0.0;
    for(int i = 0; i < ArraySize(tickets); i++) {
       ulong ticket = tickets[i];
-      // select the position and with the same symbol
-      if(PositionSelectByTicket(ticket)) {
-         // checking to keep in same position type
-         if(i == 0) {
-            _positionType = PositionGetInteger(POSITION_TYPE);
-         } else {
-            if(_positionType != PositionGetInteger(POSITION_TYPE)) {
-               Print("GetPositionCost in which the tickets is not kept the same position type. ");
-               ExpertRemove();
-            }
-         }
+      // select the position and with the same symbol & checking to keep in same position type
+      if(PositionSelectByTicket(ticket) && _positionType == PositionGetInteger(POSITION_TYPE)) {
          double volume        = PositionGetDouble(POSITION_VOLUME);
          double entryPrice    = PositionGetDouble(POSITION_PRICE_OPEN);
          totalPositionVolume += volume;
@@ -336,5 +333,5 @@ double GetPositionCost(ulong &tickets[], double &positionCost) {
    if(totalPositionVolume > 0) {
       positionCost = totalPositionCost / totalPositionVolume;
    }
-   return totalPositionVolume;
+   return positionCost;
 }
