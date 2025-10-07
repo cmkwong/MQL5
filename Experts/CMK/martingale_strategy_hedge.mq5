@@ -156,19 +156,20 @@ void RunTradingStrategy(int symbolIndex, int main_actionType) {
       // check the grid level
       CheckGridLevels(symbolIndex, main_actionType, level);
       // ----- take profit by level
-      // get the action type
-      int sub_actionType = GetActionType_byLevel(main_actionType, level);
       // get the required ticket based on level
       ulong requiredTickets[];
       GetConditionalTickets(requiredTickets, symbolIndex, main_actionType, level);
-      int earnedPip = CheckBreakEvenTP(targetMeet, requiredTickets, symbolIndex, sub_actionType);   // TODO: generalize into both direction: buy and short
+      int earnedPip = CheckBreakEvenTP(targetMeet, requiredTickets, symbolIndex);   // TODO: generalize into both direction: buy and short
       if(targetMeet) {
          v_accumEarnedPips[symbolIndex][main_actionType] = v_accumEarnedPips[symbolIndex][main_actionType] + earnedPip;
       } else {
          balanacePip += earnedPip;
       }
    }
-
+   bool  targetMeet = false;
+   ulong requiredTickets[];
+   GetConditionalTickets(requiredTickets, symbolIndex, main_actionType);
+   int earnedPip = CheckBreakEvenTP(targetMeet, requiredTickets, symbolIndex);
    // ----- check overall accumPips meet target, if so, close all the positions
    // ulong requiredTickets[];
    // GetConditionalTickets(requiredTickets, symbolIndex, main_actionType, level);
@@ -289,54 +290,87 @@ void CheckGridLevels(int symbolIndex, int main_actionType, int level) {
 //    return earnedPip;
 // }
 
-int CheckBreakEvenTP(bool &targetMeet, ulong &tickets[], int symbolIndex, int tickets_actionType) {
+int CheckBreakEvenTP(bool &targetMeet, ulong &tickets[], int symbolIndex) {
 
-   ENUM_SYMBOL_INFO_DOUBLE symbol_bidask;
-   if(tickets_actionType == 0) {
-      symbol_bidask = SYMBOL_BID;
-   } else {
-      symbol_bidask = SYMBOL_ASK;
+   // ENUM_SYMBOL_INFO_DOUBLE symbol_bidask;
+   ulong buy_tickets[];
+   ulong sell_tickets[];
+   // ----- concat the required buy & sell ticket
+   for(int i = 0; i < ArraySize(tickets); i++) {
+      ulong ticket = tickets[i];
+      if(!PositionSelectByTicket(ticket)) {
+         continue;
+      }
+      if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
+         int n = ArraySize(buy_tickets);
+         ArrayResize(buy_tickets, n + 1);
+         buy_tickets[n] = ticket;
+      } else if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL) {
+         int n = ArraySize(sell_tickets);
+         ArrayResize(sell_tickets, n + 1);
+         sell_tickets[n] = ticket;
+      }
    }
 
-   // ----- calculate the buy cost
+   // ----- calculate the required breakEvenPrice for buy and sell
+   ulong  required_tickets[];
+   double buy_breakEvenPrice  = 0.0;
+   double sell_breakEvenPrice = 0.0;
+   double buy_positionCost    = 0.0;
+   double sell_positionCost   = 0.0;
+   double current_bid         = 0.0;
+   double current_ask         = 0.0;
    double totalPositionVolume = 0.0;
-   double positionCost        = GetPositionCost(tickets, totalPositionVolume, tickets_actionType);
+   int    ACTION_TYPES[]      = {0, 1};
+   for(int ticket_actionType = 0; ticket_actionType < ArraySize(ACTION_TYPES); ticket_actionType++) {
+      if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
+         ArrayCopy(required_tickets, buy_tickets);
+      } else {
+         ArrayCopy(required_tickets, sell_tickets);
+      }
 
-   // if there are positions existed
-   if(totalPositionVolume > 0) {
-      double breakEvenPrice;
       int    targetPip    = (int)MathCeil(BreakEvenTPPips[symbolIndex]);
       double breakEvenTPs = targetPip * SymbolInfoDouble(Symbols[symbolIndex], SYMBOL_POINT);   // eg: 200 * 0.00001 = 0.02
-      if(tickets_actionType == 0) {
-         breakEvenPrice = NormalizeDouble(positionCost + breakEvenTPs, v_digits_numbers[symbolIndex]);
-      } else {
-         breakEvenPrice = NormalizeDouble(positionCost - breakEvenTPs, v_digits_numbers[symbolIndex]);
+      if(ArraySize(buy_tickets) > 0 && ticket_actionType == 0) {
+         // calculate the position cost
+         buy_positionCost   = GetPositionCost(required_tickets, totalPositionVolume, ticket_actionType);
+         buy_breakEvenPrice = NormalizeDouble(buy_positionCost + breakEvenTPs, v_digits_numbers[symbolIndex]);
+         current_bid        = NormalizeDouble(SymbolInfoDouble(Symbols[symbolIndex], SYMBOL_BID), v_digits_numbers[symbolIndex]);
       }
-      double current_bidAsk = NormalizeDouble(SymbolInfoDouble(Symbols[symbolIndex], symbol_bidask), v_digits_numbers[symbolIndex]);
+      if(ArraySize(sell_tickets) > 0 && ticket_actionType == 1) {
+         // calculate the position cost
+         sell_positionCost   = GetPositionCost(required_tickets, totalPositionVolume, ticket_actionType);
+         sell_breakEvenPrice = NormalizeDouble(sell_positionCost - breakEvenTPs, v_digits_numbers[symbolIndex]);
+         current_ask         = NormalizeDouble(SymbolInfoDouble(Symbols[symbolIndex], SYMBOL_ASK), v_digits_numbers[symbolIndex]);
+      }
+   }
 
-      if((tickets_actionType == 0 && current_bidAsk >= breakEvenPrice) ||
-         (tickets_actionType == 1 && current_bidAsk <= breakEvenPrice)) {
+   // ----- checkout if overall profit
+   if(totalPositionVolume > 0) {
+
+      if(current_bid - buy_breakEvenPrice + (sell_breakEvenPrice - current_ask) >= 0.0) {
          Print("-------------------------------");
-         Print(" (totalPositionCost / totalPositionVolume): ", positionCost);
+         Print(" totalPositionVolume: ", totalPositionVolume);
          Print("TERMINAL_COMMONDATA_PATH: ", TerminalInfoString(TERMINAL_COMMONDATA_PATH) + "/" + filename);
          FileSeek(spreadSheetHandler, 0, SEEK_END);
-         FileWrite(spreadSheetHandler, DoubleToString(positionCost));
+         FileWrite(spreadSheetHandler, DoubleToString(totalPositionVolume));
 
          // WriteCsv(filename, cols, values);
-         CloseAllTickets(tickets);
+         CloseAllTickets(buy_tickets);
+         CloseAllTickets(sell_tickets);
          targetMeet = true;
          Print("-------------------------------");
       }
-      // calculate the point difference
-      int ptDiff;
-      if(tickets_actionType == 0) {
-         ptDiff = PointsDiff(current_bidAsk, positionCost, Symbols[symbolIndex]);
-      } else {
-         ptDiff = PointsDiff(positionCost, current_bidAsk, Symbols[symbolIndex]);
-      }
-      return ptDiff;
    }
-   return 0;
+   // calculate the point difference
+   int ptDiff = 0.0;
+   if(ArraySize(buy_tickets) > 0) {
+      ptDiff += PointsDiff(current_bid, buy_positionCost, Symbols[symbolIndex]);
+   }
+   if(ArraySize(sell_tickets) > 0) {
+      ptDiff += PointsDiff(sell_positionCost, current_ask, Symbols[symbolIndex]);
+   }
+   return ptDiff;
 }
 
 // check if the balance excced the stop loss
