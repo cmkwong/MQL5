@@ -24,8 +24,8 @@ input int    i_sleepDays           = 120;    // after stop loss / no margin, the
 // strategy constant
 string Symbols[]           = {"AUDNZD"};   // , "AUDUSD", "GBPUSD", "EURGBP"
 int    RSIPeriod[]         = {14, 14, 14, 14};
-int    HedgingAfterDays[]  = {5, 10, 10, 10};            // condition of hedging: days after first opened position being hold
-double HedgingMultiplier[] = {1.05, 1.05, 1.05, 1.05};   // The hedging mechanism will operate at this multiple in order to accelerate the completion of a position that has been maintained for a long time.
+int    HedgingAfterDays[]  = {20, 10, 10, 10};            // condition of hedging: days after first opened position being hold
+double HedgingMultiplier[] = {1.1, 1.1, 1.1, 1.1};   // The hedging mechanism will operate at this multiple in order to accelerate the completion of a position that has been maintained for a long time.
 int    GridStepPoints[]    = {50, 50, 50, 50};
 int    BreakEvenTPPips[]   = {200, 200, 200, 200};
 int    SymbolTotal         = ArraySize(Symbols);
@@ -142,11 +142,13 @@ void RunTradingStrategy(int symbolIndex, int main_actionType) {
       // Print("GetDifferenceDays(last_openTime): ", GetDifferenceDays(last_openTime), " - ", TimeToString(t, TIME_DATE | TIME_SECONDS));
       // ----- level-up
       v_hedgingLevels[symbolIndex][main_actionType]++;
-      int sub_actionType = GetActionType_byLevel(main_actionType, v_hedgingLevels[symbolIndex][main_actionType]);
+      int sub_actionType = GetActionType_byLevel(symbolIndex, main_actionType, v_hedgingLevels[symbolIndex][main_actionType], true);
       // initial level position
       ulong  magic   = Encode3_Bytes(symbolIndex, main_actionType, v_hedgingLevels[symbolIndex][main_actionType]);
       string comment = "Initial " + actionType_word + " level - " + IntegerToString(v_hedgingLevels[symbolIndex][main_actionType]);
-      OpenInitialPosition(Symbols[symbolIndex], i_initialLotSize * HedgingMultiplier[symbolIndex], sub_actionType, magic, comment);
+      double initLot = i_initialLotSize * MathPow(HedgingMultiplier[symbolIndex], v_hedgingLevels[symbolIndex][main_actionType]);
+      initLot        = NormalizeLot(Symbols[symbolIndex], initLot);
+      OpenInitialPosition(Symbols[symbolIndex], initLot, sub_actionType, magic, comment);
    }
 
    // ----- into the market (buy / sell) in each level
@@ -162,7 +164,11 @@ void RunTradingStrategy(int symbolIndex, int main_actionType) {
          continue;
       }
       // ----- check the grid level
-      CheckGridLevels(symbolIndex, main_actionType, level);
+      if(!PositionSelectByTicket(requiredTickets[0])) {   // first ticket is the direction
+         continue;
+      }
+      int sub_actionType = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? 0 : 1;
+      CheckGridLevels(symbolIndex, main_actionType, level, sub_actionType);
       // ----- take profit by level
       bool targetMeet = false;
       int  earnedPip  = CheckBreakEvenTP(targetMeet, requiredTickets, symbolIndex);   // TODO: generalize into both direction: buy and short
@@ -199,8 +205,8 @@ void RunTradingStrategy(int symbolIndex, int main_actionType) {
 }
 
 // check the grid level and if good to buy, 0 = buy; 1 = sell
-void CheckGridLevels(int symbolIndex, int main_actionType, int level) {
-   int                sub_actionType = GetActionType_byLevel(main_actionType, level);
+void CheckGridLevels(int symbolIndex, int main_actionType, int level, int sub_actionType) {
+   // int                sub_actionType = GetActionType_byLevel(symbolIndex, main_actionType, level);
    double             lastEntryPrice;
    string             long_short_wording;
    ENUM_POSITION_TYPE positionType;
@@ -218,6 +224,8 @@ void CheckGridLevels(int symbolIndex, int main_actionType, int level) {
       orderType          = ORDER_TYPE_SELL;
       long_short_wording = "Sell";
    }
+   // the init lot for the level
+   double initLevelLot = DBL_MAX;
 
    // calculate how many level to be concat
    ulong tickets[];
@@ -229,7 +237,8 @@ void CheckGridLevels(int symbolIndex, int main_actionType, int level) {
       // select the position and with the same symbol
       if(PositionSelectByTicket(ticket)) {
          // get the position entry price
-         double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         double entryPrice  = PositionGetDouble(POSITION_PRICE_OPEN);
+         double entryVolume = PositionGetDouble(POSITION_VOLUME);
          if(sub_actionType == 0 && entryPrice < lastEntryPrice) {
             lastEntryPrice = entryPrice;
             // level of positions
@@ -238,6 +247,9 @@ void CheckGridLevels(int symbolIndex, int main_actionType, int level) {
             lastEntryPrice = entryPrice;
             // level of positions
             nr_positions++;
+         }
+         if(entryVolume <= initLevelLot) {
+            initLevelLot = entryVolume;
          }
       }
    }
@@ -262,7 +274,7 @@ void CheckGridLevels(int symbolIndex, int main_actionType, int level) {
       if((sub_actionType == 0 && currentPrice <= nextGridPrice) || (sub_actionType == 1 && currentPrice >= nextGridPrice)) {
          // new lot size
          // increase the initial lot based on the level
-         double newLotSize = i_initialLotSize * MathPow(HedgingMultiplier[symbolIndex], v_hedgingLevels[symbolIndex][sub_actionType]) * MathPow(i_lotMultiplier, nr_positions);
+         double newLotSize = initLevelLot * MathPow(i_lotMultiplier, nr_positions);
          newLotSize        = NormalizeLot(Symbols[symbolIndex], newLotSize);
 
          // check required margin
@@ -442,15 +454,68 @@ double GetDifferenceDays(long firstDate, long lastDate = NULL) {
 }
 
 // get the new action type by the level
-int GetActionType_byLevel(int main_actionType, int level) {
+int GetActionType_byLevel(int symbolIndex, int main_actionType, int level, bool acctLossProb = false) {
    // if %2 residual value, used original main_actionType
-   int sub_actionType;
-   if(level % 2 == 0) {
-      sub_actionType = main_actionType;
+   if(acctLossProb) {
+      return SelectWithProbability(symbolIndex);
    } else {
-      sub_actionType = main_actionType == 0 ? 1 : 0;
+      int sub_actionType;
+      if(level % 2 == 0) {
+         sub_actionType = main_actionType;
+      } else {
+         sub_actionType = main_actionType == 0 ? 1 : 0;
+      }
+      return sub_actionType;
    }
-   return sub_actionType;
+}
+
+// Return 0 or 1
+// pZero: probability to select 0 (0.0 ~ 1.0), e.g., 0.1 -> 10% select 0, 90% select 1
+// seed:  optional random seed; if 0 then initialize with current time
+int SelectWithProbability(int symbolIndex, uint seed = 0) {
+
+   // ----- calculate the probablity
+   ulong  tickets[];
+   double totalLoss = 0.0;
+   double buyLoss   = 0.0;
+   double sellLoss  = 0.0;
+   GetConditionalTickets(tickets, symbolIndex);
+   for(int i = 0; i < ArraySize(tickets); i++) {
+      ulong tk = tickets[i];
+      if(!PositionSelectByTicket(tk)) {
+         continue;
+      }
+      double loss       = PositionGetDouble(POSITION_PROFIT);
+      double actionType = PositionGetInteger(POSITION_TYPE);
+      if(loss < 0) {
+         totalLoss += loss;
+         if(actionType == POSITION_TYPE_BUY) {
+            buyLoss += loss;
+         }
+         if(actionType == POSITION_TYPE_SELL) {
+            sellLoss += loss;
+         }
+      }
+   }
+
+   // less sell loss -> more probablility to select sell action type
+   double pZero = sellLoss / totalLoss;
+
+   // Initialize RNG seed (only once or when a seed is provided)
+   static bool seeded = false;
+   if(seed != 0) {
+      MathSrand((int)seed);
+      seeded = true;
+   } else if(!seeded) {
+      MathSrand((int)TimeLocal());
+      seeded = true;
+   }
+
+   // Get a random number in [0,1)
+   double r = (double)MathRand() / 32767.0;   // MathRand() returns 0..32767
+
+   // Return 0 if r < pZero, otherwise return 1
+   return (r < pZero) ? 0 : 1;
 }
 
 // get required condition by below arguments
