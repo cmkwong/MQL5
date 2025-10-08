@@ -116,16 +116,17 @@ void InitializeVariables(int symbolIndex) {
 
 // run required strategy
 void RunTradingStrategy(int symbolIndex, int main_actionType) {
+
    string actionType_word = main_actionType == 0 ? "Buy" : "Sell";
-   // ----- check if buy / sell position holding
+   // ----- check if init buy / sell
    ulong nr_tickets[];
-   GetConditionalTickets(nr_tickets, symbolIndex, main_actionType);
+   GetConditionalTickets(nr_tickets, symbolIndex, main_actionType, 0);   // start for 0
    // Open inital buy / sell position if no buy / sell positions
    if(ArraySize(nr_tickets) == 0 && TimeCurrent() >= v_backToTradeUntil[symbolIndex]) {
       // setting the magic number (setting in global)
-      ulong magic = Encode3_Bytes(symbolIndex, main_actionType, v_hedgingLevels[symbolIndex][main_actionType]);
+      ulong magic = Encode3_Bytes(symbolIndex, main_actionType, 0);
       // initial position
-      string comment = "Initial " + actionType_word + " level - " + IntegerToString(v_hedgingLevels[symbolIndex][main_actionType]);
+      string comment = "Initial " + actionType_word + " level - " + IntegerToString(0);
       OpenInitialPosition(Symbols[symbolIndex], i_initialLotSize, main_actionType, magic, comment);
    }
 
@@ -138,8 +139,7 @@ void RunTradingStrategy(int symbolIndex, int main_actionType) {
    double diffDays      = GetDifferenceDays(last_openTime);
    if(GetDifferenceDays(last_openTime) >= HedgingAfterDays[symbolIndex] * (current_level + 1)) {
       datetime t = (datetime)(last_openTime / 1000);
-
-      Print("GetDifferenceDays(last_openTime): ", GetDifferenceDays(last_openTime), " - ", TimeToString(t, TIME_DATE | TIME_SECONDS));
+      // Print("GetDifferenceDays(last_openTime): ", GetDifferenceDays(last_openTime), " - ", TimeToString(t, TIME_DATE | TIME_SECONDS));
       // ----- level-up
       v_hedgingLevels[symbolIndex][main_actionType]++;
       int sub_actionType = GetActionType_byLevel(main_actionType, v_hedgingLevels[symbolIndex][main_actionType]);
@@ -150,18 +150,27 @@ void RunTradingStrategy(int symbolIndex, int main_actionType) {
    }
 
    // ----- into the market (buy / sell) in each level
-   int balanacePip = 0;
-   for(int level = 0; level < v_hedgingLevels[symbolIndex][main_actionType] + 1; level++) {
-      bool targetMeet = false;
-      // check the grid level
-      CheckGridLevels(symbolIndex, main_actionType, level);
-      // ----- take profit by level
-      // get the required ticket based on level
+   int   balanacePip = 0;
+   ulong maxTickets[];
+   GetConditionalTickets(maxTickets, symbolIndex, main_actionType);
+   int maxLevel = GetMaxLevel_byTickets(maxTickets);
+   for(int level = 0; level < maxLevel + 1; level++) {
+      // ----- get the required ticket based on level
       ulong requiredTickets[];
       GetConditionalTickets(requiredTickets, symbolIndex, main_actionType, level);
-      int earnedPip = CheckBreakEvenTP(targetMeet, requiredTickets, symbolIndex);   // TODO: generalize into both direction: buy and short
+      if(ArraySize(requiredTickets) == 0) {
+         continue;
+      }
+      // ----- check the grid level
+      CheckGridLevels(symbolIndex, main_actionType, level);
+      // ----- take profit by level
+      bool targetMeet = false;
+      int  earnedPip  = CheckBreakEvenTP(targetMeet, requiredTickets, symbolIndex);   // TODO: generalize into both direction: buy and short
       if(targetMeet) {
          v_accumEarnedPips[symbolIndex][main_actionType] = v_accumEarnedPips[symbolIndex][main_actionType] + earnedPip;
+         if(level > 0) {
+            v_hedgingLevels[symbolIndex][main_actionType]--;
+         }
       } else {
          balanacePip += earnedPip;
       }
@@ -169,20 +178,24 @@ void RunTradingStrategy(int symbolIndex, int main_actionType) {
    bool  targetMeet = false;
    ulong requiredTickets[];
    GetConditionalTickets(requiredTickets, symbolIndex, main_actionType);
-   int earnedPip = CheckBreakEvenTP(targetMeet, requiredTickets, symbolIndex);
+   int earnedPip = CheckBreakEvenTP(targetMeet, requiredTickets, symbolIndex, true);
+   if(targetMeet == true) {
+      v_hedgingLevels[symbolIndex][main_actionType]   = 0;   // reset to level 0
+      v_accumEarnedPips[symbolIndex][main_actionType] = 0;
+   }
    // ----- check overall accumPips meet target, if so, close all the positions
    // ulong requiredTickets[];
    // GetConditionalTickets(requiredTickets, symbolIndex, main_actionType, level);
    // int earnedPip = CheckBreakEvenTP(targetMeet, requiredTickets, symbolIndex, sub_actionType);
-   if((balanacePip + v_accumEarnedPips[symbolIndex][main_actionType]) >= BreakEvenTPPips[symbolIndex]) {
-      ulong nr_tickets[];
-      GetConditionalTickets(nr_tickets, symbolIndex, main_actionType);
-      if(ArraySize(nr_tickets) > 0) {
-         CloseAllTickets(nr_tickets);
-         v_hedgingLevels[symbolIndex][main_actionType]   = 0;   // reset to level 0
-         v_accumEarnedPips[symbolIndex][main_actionType] = 0;
-      }
-   }
+   // if((balanacePip + v_accumEarnedPips[symbolIndex][main_actionType]) >= BreakEvenTPPips[symbolIndex]) {
+   //    ulong nr_tickets[];
+   //    GetConditionalTickets(nr_tickets, symbolIndex, main_actionType);
+   //    if(ArraySize(nr_tickets) > 0) {
+   //       CloseAllTickets(nr_tickets);
+   //       v_hedgingLevels[symbolIndex][main_actionType]   = 0;   // reset to level 0
+   //       v_accumEarnedPips[symbolIndex][main_actionType] = 0;
+   //    }
+   // }
 }
 
 // check the grid level and if good to buy, 0 = buy; 1 = sell
@@ -279,18 +292,8 @@ void CheckGridLevels(int symbolIndex, int main_actionType, int level) {
    }
 }
 
-// // calculate the break even point account with profit token
-// int SetBreakEvenTP_level(bool &targetMeet, int symbolIndex, int main_actionType, int level) {
-//    // get the action type
-//    int sub_actionType = GetActionType_byLevel(main_actionType, level);
-//    // get the required ticket
-//    ulong requiredTickets[];
-//    GetConditionalTickets(requiredTickets, symbolIndex, main_actionType, level);
-//    int earnedPip = CheckBreakEvenTP(targetMeet, requiredTickets, symbolIndex, sub_actionType);
-//    return earnedPip;
-// }
-
-int CheckBreakEvenTP(bool &targetMeet, ulong &tickets[], int symbolIndex) {
+// calculate the break even point account with profit token
+int CheckBreakEvenTP(bool &targetMeet, ulong &tickets[], int symbolIndex, bool _flag = false) {
 
    // ENUM_SYMBOL_INFO_DOUBLE symbol_bidask;
    ulong buy_tickets[];
@@ -323,7 +326,7 @@ int CheckBreakEvenTP(bool &targetMeet, ulong &tickets[], int symbolIndex) {
    double totalPositionVolume = 0.0;
    int    ACTION_TYPES[]      = {0, 1};
    for(int ticket_actionType = 0; ticket_actionType < ArraySize(ACTION_TYPES); ticket_actionType++) {
-      if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
+      if(ticket_actionType == 0) {
          ArrayCopy(required_tickets, buy_tickets);
       } else {
          ArrayCopy(required_tickets, sell_tickets);
@@ -356,6 +359,9 @@ int CheckBreakEvenTP(bool &targetMeet, ulong &tickets[], int symbolIndex) {
          FileWrite(spreadSheetHandler, DoubleToString(totalPositionVolume));
 
          // WriteCsv(filename, cols, values);
+         if(_flag == true) {
+            Print("Stop");
+         }
          CloseAllTickets(buy_tickets);
          CloseAllTickets(sell_tickets);
          targetMeet = true;
@@ -404,6 +410,25 @@ long GetFirstMagicDate(int symbolIndex, int main_actionType, int level) {
       }
    }
    return openTime;
+}
+
+// getting the max level
+int GetMaxLevel_byTickets(ulong &tickets[]) {
+   int maxLevel = 0;
+   for(int i = 0; i < ArraySize(tickets); i++) {
+      ulong tk = tickets[i];
+      if(!PositionSelectByTicket(tk))
+         continue;
+      int  _symbolIndex;
+      int  _main_actionType;
+      int  _level;
+      long posMagic = PositionGetInteger(POSITION_MAGIC);
+      Decode3_Bytes((int)posMagic, _symbolIndex, _main_actionType, _level);
+      if(_level > maxLevel) {
+         maxLevel = _level;
+      }
+   }
+   return maxLevel;
 }
 
 // getting the difference in days
