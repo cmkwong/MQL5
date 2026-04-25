@@ -149,12 +149,12 @@ void CheckBreakouts(long chartId)
          {
             g_alertedBreakout += key + "|";
             if(role == 1)
-               PrintFormat("[BREAKOUT] %s %s – Price ROSE ABOVE %s line \"%s\"  "
+               PrintFormat("[BREAKOUT] %s %s - Price ROSE ABOVE %s line \"%s\"  "
                            "| Ask=%.5f  Line=%.5f",
                            _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period),
                            roleStr, objName, ask, linePrice);
             else
-               PrintFormat("[BREAKOUT] %s %s – Price FELL BELOW %s line \"%s\"  "
+               PrintFormat("[BREAKOUT] %s %s - Price FELL BELOW %s line \"%s\"  "
                            "| Bid=%.5f  Line=%.5f",
                            _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period),
                            roleStr, objName, bid, linePrice);
@@ -170,7 +170,7 @@ void CheckBreakouts(long chartId)
             g_alertedProximity += key + "|";
             double priceDist = (role == 1) ? (linePrice - ask) : (bid - linePrice);
             double pctAway   = (linePrice > 0) ? MathAbs(priceDist) / linePrice * 100.0 : 0.0;
-            PrintFormat("[NEAR] %s %s – Price is %.2f%% away from %s line \"%s\"  "
+            PrintFormat("[NEAR] %s %s - Price is %.2f%% away from %s line \"%s\"  "
                         "| Mid=%.5f  Line=%.5f  (within %.1f%% zone)",
                         _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period),
                         pctAway, roleStr, objName,
@@ -194,7 +194,7 @@ int OnInit()
          PrintFormat("[WARN] Could not switch to profile: %s  (profile may not exist or is already active)", InpProfileName);
    }
 
-   PrintFormat("[INFO] Pressure/Support checker started on %s %s",
+   PrintFormat("[INFO] Pressure/Support checker started on %s %s - OK",
                _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period));
    return INIT_SUCCEEDED;
 }
