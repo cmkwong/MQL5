@@ -3,21 +3,30 @@
 
 #include <Trade/Trade.mqh>
 
-input string          InpLhsSymbol       = "EURUSD";                                         // LHS symbol (Y)
-input string          InpRhsSymbol1      = "EURGBP";                                         // RHS symbol X1
-input string          InpRhsSymbol2      = "GBPUSD";                                         // RHS symbol X2
-input double          InpCoeff1          = 1.34285999;                                       // p1 in Y = p1*X1 + p2*X2 + c
-input double          InpCoeff2          = 0.86878936;                                       // p2 in Y = p1*X1 + p2*X2 + c
-input double          InpIntercept       = -1.16663185;                                      // c in Y = p1*X1 + p2*X2 + c
-input double          InpLotMultiplier   = 0.01;                                             // Base lot multiplier for all legs
-input double          InpSignalThreshold = 0.00000;                                          // No-trade band around zero spread
-input bool            InpCloseOnNeutral  = false;                                            // Close basket when spread is inside threshold
-input bool            InpTradeOnNewBar   = true;                                             // Evaluate/open/flip only on new bar
-input ENUM_TIMEFRAMES InpSignalTimeframe = PERIOD_CURRENT;                                   // Bar timeframe used by new-bar gate
-input ulong           InpMagicNumber     = 26050601;                                         // Magic number for this strategy
-input int             InpDeviationPoints = 20;                                               // Slippage allowance in points
-input string          InpTradeLogCsvPath = "cointegration/cointegration_apply_trades.csv";   // CSV log output path
-input bool            InpTradeLogCommon  = true;                                             // true=Common Files, false=terminal Files
+enum ENUM_TRADE_SIDE_MODE {
+   TRADE_SIDE_BOTH = 0,
+   TRADE_SIDE_LHS  = 1,
+   TRADE_SIDE_RHS  = 2
+};
+
+input string               InpLhsSymbol       = "EURUSD";                                         // LHS symbol (Y)
+input string               InpRhsSymbol1      = "EURGBP";                                         // RHS symbol X1
+input string               InpRhsSymbol2      = "GBPUSD";                                         // RHS symbol X2
+input double               InpCoeff1          = 1.34285999;                                       // p1 in Y = p1*X1 + p2*X2 + c
+input double               InpCoeff2          = 0.86878936;                                       // p2 in Y = p1*X1 + p2*X2 + c
+input double               InpIntercept       = -1.16663185;                                      // c in Y = p1*X1 + p2*X2 + c
+input double               InpLotMultiplier   = 0.01;                                             // Base lot multiplier for all legs
+input ENUM_TRADE_SIDE_MODE InpTradeSideMode   = TRADE_SIDE_BOTH;                                  // Trade legs: BOTH, LHS-only, RHS-only
+input double               InpSignalThreshold = 0.00000;                                          // No-trade band around zero spread
+input bool                 InpCloseOnNeutral  = false;                                            // Close basket when spread is inside threshold
+input bool                 InpTradeOnNewBar   = true;                                             // Evaluate/open/flip only on new bar
+input ENUM_TIMEFRAMES      InpSignalTimeframe = PERIOD_CURRENT;                                   // Bar timeframe used by new-bar gate
+input bool                 InpShowVariantPlot = true;                                             // Show variant plot indicator while trading
+input int                  InpVariantPlotBars = 3000;                                             // Bars to plot for variant indicator
+input ulong                InpMagicNumber     = 26050601;                                         // Magic number for this strategy
+input int                  InpDeviationPoints = 20;                                               // Slippage allowance in points
+input string               InpTradeLogCsvPath = "cointegration/cointegration_apply_trades.csv";   // CSV log output path
+input bool                 InpTradeLogCommon  = true;                                             // true=Common Files, false=terminal Files
 
 CTrade g_trade;
 
@@ -36,6 +45,9 @@ string            g_rhs1Resolved = "";
 string            g_rhs2Resolved = "";
 OpenPositionState g_openStates[];
 string            g_tradeLogResolvedPath = "";
+int               g_variantHandle        = INVALID_HANDLE;
+int               g_variantSubwindow     = -1;
+string            g_variantShortName     = "";
 
 string ToUpperCopy(const string value) {
    string out = value;
@@ -483,6 +495,157 @@ string DirectionToOperationText(const int direction) {
    return (direction >= 0 ? "long" : "short");
 }
 
+string TradeSideModeToText() {
+   if(InpTradeSideMode == TRADE_SIDE_LHS)
+      return "LHS";
+   if(InpTradeSideMode == TRADE_SIDE_RHS)
+      return "RHS";
+   return "BOTH";
+}
+
+bool IsLhsEnabled() {
+   return (InpTradeSideMode == TRADE_SIDE_BOTH || InpTradeSideMode == TRADE_SIDE_LHS);
+}
+
+bool IsRhsEnabled() {
+   return (InpTradeSideMode == TRADE_SIDE_BOTH || InpTradeSideMode == TRADE_SIDE_RHS);
+}
+
+string BuildEquationText() {
+   return StringFormat("%s=(%.8f)*%s+(%.8f)*%s+%.8f",
+                       g_lhsResolved,
+                       InpCoeff1,
+                       g_rhs1Resolved,
+                       InpCoeff2,
+                       g_rhs2Resolved,
+                       InpIntercept);
+}
+
+string BuildDealPlanText(const int signalDirection) {
+   if(signalDirection != 1 && signalDirection != -1)
+      return "none";
+
+   int lhsDir = (signalDirection == 1 ? 1 : -1);
+   int rhsDir = -lhsDir;
+
+   double lhsLots  = NormalizeVolume(g_lhsResolved, InpLotMultiplier);
+   double rhs1Lots = NormalizeVolume(g_rhs1Resolved, InpLotMultiplier * MathAbs(InpCoeff1));
+   double rhs2Lots = NormalizeVolume(g_rhs2Resolved, InpLotMultiplier * MathAbs(InpCoeff2));
+
+   string plan = "";
+   if(IsLhsEnabled()) {
+      plan += StringFormat("LHS:%s %s %.2f",
+                           DirectionToOperationText(lhsDir),
+                           g_lhsResolved,
+                           lhsLots);
+   }
+
+   if(IsRhsEnabled()) {
+      if(StringLen(plan) > 0)
+         plan += " | ";
+      plan += StringFormat("RHS1:%s %s %.2f; RHS2:%s %s %.2f",
+                           DirectionToOperationText(rhsDir),
+                           g_rhs1Resolved,
+                           rhs1Lots,
+                           DirectionToOperationText(rhsDir),
+                           g_rhs2Resolved,
+                           rhs2Lots);
+   }
+
+   if(StringLen(plan) == 0)
+      return "none";
+
+   return plan;
+}
+
+int CreateVariantIndicatorHandle(const string indicatorName) {
+   return iCustom(_Symbol,
+                  _Period,
+                  indicatorName,
+                  InpSignalTimeframe,
+                  InpVariantPlotBars,
+                  true,
+                  g_lhsResolved,
+                  g_rhs1Resolved,
+                  g_rhs2Resolved,
+                  InpCoeff1,
+                  InpCoeff2,
+                  InpIntercept,
+                  clrDeepSkyBlue,
+                  false,
+                  "",
+                  "",
+                  "",
+                  0.0,
+                  0.0,
+                  0.0,
+                  clrOrange,
+                  false,
+                  "",
+                  "",
+                  "",
+                  0.0,
+                  0.0,
+                  0.0,
+                  clrLimeGreen);
+}
+
+bool TryAttachVariantPlotByName(const string indicatorName) {
+   int handle = CreateVariantIndicatorHandle(indicatorName);
+   if(handle == INVALID_HANDLE)
+      return false;
+
+   int targetWindow = (int)ChartGetInteger(0, CHART_WINDOWS_TOTAL, 0);
+   if(!ChartIndicatorAdd(0, targetWindow, handle)) {
+      PrintFormat("[WARN] Failed to attach variant indicator '%s' (err=%d)", indicatorName, GetLastError());
+      IndicatorRelease(handle);
+      return false;
+   }
+
+   g_variantHandle    = handle;
+   g_variantSubwindow = targetWindow;
+
+   ENUM_TIMEFRAMES tf = (InpSignalTimeframe == PERIOD_CURRENT ? (ENUM_TIMEFRAMES)_Period : InpSignalTimeframe);
+   g_variantShortName = "Cointegration Variant Plot (" + EnumToString(tf) + ")";
+
+   PrintFormat("[INFO] Variant plot attached using '%s'", indicatorName);
+   return true;
+}
+
+bool AttachVariantPlot() {
+   if(!InpShowVariantPlot)
+      return true;
+
+   // Try several likely names so it works whether the indicator is in Experts or Indicators tree.
+   string names[] = {
+       "Experts\\CMK\\cointegration\\cointegration_variant_plot",
+       "\\Experts\\CMK\\cointegration\\cointegration_variant_plot",
+       "CMK\\cointegration\\cointegration_variant_plot",
+       "cointegration_variant_plot"};
+
+   for(int i = 0; i < ArraySize(names); i++) {
+      if(TryAttachVariantPlotByName(names[i]))
+         return true;
+   }
+
+   Print("[WARN] Variant plot indicator could not be loaded. Trading continues without plot.");
+   Print("[WARN] Ensure cointegration_variant_plot is compiled and accessible to iCustom.");
+   return false;
+}
+
+void DetachVariantPlot() {
+   if(g_variantShortName != "" && g_variantSubwindow >= 0)
+      ChartIndicatorDelete(0, g_variantSubwindow, g_variantShortName);
+
+   if(g_variantHandle != INVALID_HANDLE) {
+      IndicatorRelease(g_variantHandle);
+      g_variantHandle = INVALID_HANDLE;
+   }
+
+   g_variantSubwindow = -1;
+   g_variantShortName = "";
+}
+
 double GetManagedNetVolume(const string symbol) {
    double net   = 0.0;
    int    total = PositionsTotal();
@@ -515,6 +678,27 @@ int GetBasketDirection() {
    int lhsSign  = SignFromValue(GetManagedNetVolume(g_lhsResolved));
    int rhs1Sign = SignFromValue(GetManagedNetVolume(g_rhs1Resolved));
    int rhs2Sign = SignFromValue(GetManagedNetVolume(g_rhs2Resolved));
+
+   if(InpTradeSideMode == TRADE_SIDE_LHS) {
+      if(rhs1Sign != 0 || rhs2Sign != 0)
+         return 99;
+      if(lhsSign == 1)
+         return 1;
+      if(lhsSign == -1)
+         return -1;
+      return 0;
+   }
+
+   if(InpTradeSideMode == TRADE_SIDE_RHS) {
+      if(lhsSign != 0)
+         return 99;
+      if(rhs1Sign == 0 && rhs2Sign == 0)
+         return 0;
+      if(rhs1Sign != rhs2Sign)
+         return 99;
+
+      return (rhs1Sign == -1 ? 1 : -1);   // signal=1 means RHS short; signal=-1 means RHS long
+   }
 
    if(lhsSign == 1 && rhs1Sign == -1 && rhs2Sign == -1)
       return 1;   // LHS long, RHS legs short
@@ -592,7 +776,8 @@ bool OpenLeg(const string symbol, const int direction, const double volume) {
       return false;
    }
 
-   PrintFormat("[ORDER] %s %s %.2f",
+   PrintFormat("[ORDER] Eq:%s | %s %s %.2f",
+               BuildEquationText(),
                (direction > 0 ? "BUY" : "SELL"),
                symbol,
                normalizedVolume);
@@ -610,9 +795,17 @@ bool OpenBasketBySignal(const int signalDirection) {
    int lhsDir = (signalDirection == 1 ? 1 : -1);
    int rhsDir = -lhsDir;
 
-   bool okLhs  = OpenLeg(g_lhsResolved, lhsDir, lhsLots);
-   bool okRhs1 = OpenLeg(g_rhs1Resolved, rhsDir, rhs1Lots);
-   bool okRhs2 = OpenLeg(g_rhs2Resolved, rhsDir, rhs2Lots);
+   bool okLhs  = true;
+   bool okRhs1 = true;
+   bool okRhs2 = true;
+
+   if(IsLhsEnabled())
+      okLhs = OpenLeg(g_lhsResolved, lhsDir, lhsLots);
+
+   if(IsRhsEnabled()) {
+      okRhs1 = OpenLeg(g_rhs1Resolved, rhsDir, rhs1Lots);
+      okRhs2 = OpenLeg(g_rhs2Resolved, rhsDir, rhs2Lots);
+   }
 
    return (okLhs && okRhs1 && okRhs2);
 }
@@ -630,6 +823,26 @@ bool IsNewBar() {
    return true;
 }
 
+bool GetVariantSpreadFromIndicator(double &variantSpread) {
+   if(g_variantHandle == INVALID_HANDLE)
+      return false;
+
+   double buf[];
+   int    copied = CopyBuffer(g_variantHandle, 0, 0, 3, buf);
+   if(copied <= 0)
+      return false;
+
+   for(int i = 0; i < copied; i++) {
+      double v = buf[i];
+      if(v != EMPTY_VALUE) {
+         variantSpread = v;
+         return true;
+      }
+   }
+
+   return false;
+}
+
 int EvaluateSignal(double &lhs, double &rhs, double &spread) {
    double lhsPrice  = 0.0;
    double rhs1Price = 0.0;
@@ -645,6 +858,14 @@ int EvaluateSignal(double &lhs, double &rhs, double &spread) {
    lhs    = lhsPrice;
    rhs    = InpCoeff1 * rhs1Price + InpCoeff2 * rhs2Price + InpIntercept;
    spread = lhs - rhs;
+
+   // Reuse variant-plot indicator calculation when available.
+   // Fallback remains the direct equation calculation above.
+   double indicatorSpread = 0.0;
+   if(GetVariantSpreadFromIndicator(indicatorSpread)) {
+      spread = indicatorSpread;
+      rhs    = lhs - spread;
+   }
 
    // Mean-reversion direction:
    // spread > 0 (LHS above RHS)  -> short LHS / long RHS legs
@@ -689,10 +910,14 @@ int OnInit() {
                   (InpTradeLogCommon ? "[COMMON] " : "[LOCAL] "),
                   g_tradeLogResolvedPath);
 
+   if(InpShowVariantPlot)
+      AttachVariantPlot();
+
    return INIT_SUCCEEDED;
 }
 
 void OnDeinit(const int reason) {
+   DetachVariantPlot();
    PrintFormat("[DEINIT] cointegration_apply stopped. reason=%d", reason);
 }
 
@@ -787,12 +1012,18 @@ void OnTick() {
    int signal = EvaluateSignal(lhs, rhs, spread);
    int basket = GetBasketDirection();
 
-   PrintFormat("[STATE] LHS=%.6f RHS=%.6f Spread=%.6f Signal=%d Basket=%d",
+   string eqText   = BuildEquationText();
+   string dealPlan = BuildDealPlanText(signal);
+
+   PrintFormat("[STATE] Eq:%s Mode=%s LHS=%.6f RHS=%.6f Spread=%.6f Signal=%d Basket=%d Deal=%s",
+               eqText,
+               TradeSideModeToText(),
                lhs,
                rhs,
                spread,
                signal,
-               basket);
+               basket,
+               dealPlan);
 
    if(signal == 0) {
       if(InpCloseOnNeutral && basket != 0) {
@@ -809,6 +1040,12 @@ void OnTick() {
       if(!CloseManagedBasket())
          return;
    }
+
+   PrintFormat("[DEAL] Eq:%s Mode=%s Signal=%d -> %s",
+               eqText,
+               TradeSideModeToText(),
+               signal,
+               dealPlan);
 
    OpenBasketBySignal(signal);
 }
